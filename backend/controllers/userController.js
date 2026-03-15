@@ -1,0 +1,299 @@
+import User from '../models/User.js';
+import jwt from 'jsonwebtoken';
+
+// Generate JWT Token
+const generateToken = (userId, role) => {
+  return jwt.sign(
+    { userId, role },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRATION || '7d' }
+  );
+};
+
+// Register User
+export const register = async (req, res) => {
+  try {
+    const { name, email, password, role, phone } = req.body;
+
+    // Validation
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Please provide name, email, and password' });
+    }
+
+    // Check if user already exists
+    const userExists = await User.findOne({ email });
+    if (userExists) {
+      return res.status(409).json({ error: 'User with this email already exists' });
+    }
+
+    // Create new user
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role: role || 'dispatcher',
+      phone,
+    });
+
+    // Generate token
+    const token = generateToken(user._id, user.role);
+
+    // Return user data (without password)
+    res.status(201).json({
+      message: 'User registered successfully',
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Login User
+export const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Please provide email and password' });
+    }
+
+    // Find user and get password (normally not selected)
+    const user = await User.findOne({ email }).select('+password');
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // Check password
+    const isPasswordCorrect = await user.comparePassword(password);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // Check if user is active
+    if (!user.active) {
+      return res.status(403).json({ error: 'User account is not active' });
+    }
+
+    // Update last login
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Generate token
+    const token = generateToken(user._id, user.role);
+
+    // Return user data (without password)
+    res.status(200).json({
+      message: 'Login successful',
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Get User Profile
+export const getProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.status(200).json({
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        bio: user.bio,
+        address: user.address,
+        notificationSettings: user.notificationSettings,
+        workspaceSettings: user.workspaceSettings,
+        active: user.active,
+        createdAt: user.createdAt,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Update User Profile
+export const updateProfile = async (req, res) => {
+  try {
+    const { name, phone, bio, address, email } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      req.user.userId,
+      { name, phone, bio, address, email },
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.status(200).json({
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        phone: user.phone,
+        bio: user.bio,
+        address: user.address,
+        notificationSettings: user.notificationSettings,
+        workspaceSettings: user.workspaceSettings,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Update User Settings (Notifications, Workspace)
+export const updateSettings = async (req, res) => {
+  try {
+    const { notificationSettings, workspaceSettings } = req.body;
+
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (notificationSettings) user.notificationSettings = { ...user.notificationSettings, ...notificationSettings };
+    if (workspaceSettings) user.workspaceSettings = { ...user.workspaceSettings, ...workspaceSettings };
+
+    await user.save();
+
+    res.status(200).json({
+      message: 'Settings updated successfully',
+      settings: {
+        notificationSettings: user.notificationSettings,
+        workspaceSettings: user.workspaceSettings,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Export User Data
+export const exportData = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // In a real app, this would include all their related data (trips, logs, etc.)
+    // For now, just user info
+    const data = {
+      user: user.toJSON(),
+      timestamp: new Date(),
+      info: 'FleetFlow Personal Data Export'
+    };
+
+    res.status(200).json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Delete/Deactivate Account (User self-service)
+export const deleteAccount = async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.user.userId,
+      { active: false },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.status(200).json({ message: 'Account deactivated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Change Password
+export const changePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: 'Please provide old and new password' });
+    }
+
+    const user = await User.findById(req.user.userId).select('+password');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Verify old password
+    const isPasswordCorrect = await user.comparePassword(oldPassword);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ error: 'Old password is incorrect' });
+    }
+
+    // Update password
+    user.password = newPassword;
+    await user.save();
+
+    res.status(200).json({ message: 'Password changed successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Get All Users (Admin/Manager only)
+export const getAllUsers = async (req, res) => {
+  try {
+    const users = await User.find({ active: true }).select('-password');
+    res.status(200).json({ users });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Deactivate User (Admin/Manager only)
+export const deactivateUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { active: false },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.status(200).json({ message: 'User deactivated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
