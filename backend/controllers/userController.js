@@ -13,7 +13,7 @@ const generateToken = (userId, role) => {
 // Register User
 export const register = async (req, res) => {
   try {
-    const { name, email, password, role, phone } = req.body;
+    const { name, email, password, phone } = req.body;
 
     // Validation
     if (!name || !email || !password) {
@@ -26,12 +26,13 @@ export const register = async (req, res) => {
       return res.status(409).json({ error: 'User with this email already exists' });
     }
 
-    // Create new user
+    // Create new user - SECURITY: Force default role server-side, ignore client input
+    // Elevated roles must be assigned through admin workflow
     const user = await User.create({
       name,
       email,
       password,
-      role: role || 'dispatcher',
+      role: 'dispatcher',
       phone,
     });
 

@@ -6,6 +6,8 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { connectDB } from './config/database.js';
@@ -38,19 +40,51 @@ const limiter = rateLimit({
 // Apply rate limiter to auth routes
 app.use('/api/auth', limiter);
 
+// SECURITY: Strict CORS configuration with allowlist
+const allowedOrigins = (process.env.FRONTEND_URL || '').split(',').map(s => s.trim()).filter(Boolean);
+
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || "*", // Secure in production
-    methods: ["GET", "POST"]
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.length === 0) {
+        // Fail-closed: no origins configured
+        return callback(new Error('CORS: No allowed origins configured'));
+      }
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('CORS: Origin not allowed'));
+      }
+    },
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
 // Attach io to app to use in controllers
 app.set('io', io);
 
-// Middleware
+// Middleware - Strict CORS with credentials
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "*",
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.length === 0) {
+      // Fail-closed: no origins configured
+      return callback(new Error('CORS: No allowed origins configured'));
+    }
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS: Origin not allowed'));
+    }
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -59,13 +93,34 @@ app.use(express.urlencoded({ extended: true }));
 // Connect to Database
 connectDB();
 
+// SECURITY: Socket.io authentication middleware
+io.use((socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+    
+    if (!token) {
+      return next(new Error('Authentication required'));
+    }
+    
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    socket.user = decoded;
+    next();
+  } catch (error) {
+    next(new Error('Invalid or expired token'));
+  }
+});
+
 // Socket.io connection logic
 io.on('connection', (socket) => {
-  console.log('🔌 New client connected:', socket.id);
+  console.log('🔌 Authenticated client connected:', socket.id, 'User:', socket.user.userId);
 
-  socket.on('join_trip', (tripId) => {
+  socket.on('join_trip', async (tripId) => {
+    // TODO: Add authorization check - verify user has access to this trip
+    // For now, authenticated users can join any trip
+    // In production, check if user owns/is assigned to this trip
     socket.join(`trip_${tripId}`);
-    console.log(`📡 Client ${socket.id} joined trip tracking: ${tripId}`);
+    console.log(`📡 Client ${socket.id} (User: ${socket.user.userId}) joined trip tracking: ${tripId}`);
   });
 
   socket.on('leave_trip', (tripId) => {
@@ -98,19 +153,20 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Debug endpoint — visit /debug on your Render URL to diagnose config issues
-app.get('/debug', (req, res) => {
-  const dbStates = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-  res.status(200).json({
-    hasMongoURI: !!process.env.MONGODB_URI,
-    hasJwtSecret: !!process.env.JWT_SECRET,
-    hasFrontendUrl: !!process.env.FRONTEND_URL,
-    frontendUrl: process.env.FRONTEND_URL,
-    mongoURIPrefix: process.env.MONGODB_URI ? process.env.MONGODB_URI.substring(0, 35) + '...' : 'NOT SET',
-    nodeEnv: process.env.NODE_ENV,
-    dbReadyState: dbStates[mongoose.connection.readyState] || 'unknown',
+// SECURITY: Debug endpoint removed in production to prevent information disclosure
+// If needed for diagnostics, protect with admin authentication and IP restrictions
+if (process.env.NODE_ENV === 'development') {
+  app.get('/debug', (req, res) => {
+    const dbStates = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    res.status(200).json({
+      hasMongoURI: !!process.env.MONGODB_URI,
+      hasJwtSecret: !!process.env.JWT_SECRET,
+      hasFrontendUrl: !!process.env.FRONTEND_URL,
+      nodeEnv: process.env.NODE_ENV,
+      dbReadyState: dbStates[mongoose.connection.readyState] || 'unknown',
+    });
   });
-});
+}
 
 // 404 Handler
 app.use((req, res) => {
