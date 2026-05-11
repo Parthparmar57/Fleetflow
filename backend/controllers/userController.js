@@ -1,10 +1,10 @@
 import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
 
-// Generate JWT Token
-const generateToken = (userId, role) => {
+// Generate JWT Token with token version for revocation support
+const generateToken = (userId, role, tokenVersion) => {
   return jwt.sign(
-    { userId, role },
+    { userId, role, tokenVersion },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRATION || '7d' }
   );
@@ -36,8 +36,8 @@ export const register = async (req, res) => {
       phone,
     });
 
-    // Generate token
-    const token = generateToken(user._id, user.role);
+    // Generate token with version
+    const token = generateToken(user._id, user.role, user.tokenVersion);
 
     // Return user data (without password)
     res.status(201).json({
@@ -86,8 +86,8 @@ export const login = async (req, res) => {
     user.lastLogin = new Date();
     await user.save();
 
-    // Generate token
-    const token = generateToken(user._id, user.role);
+    // Generate token with version
+    const token = generateToken(user._id, user.role, user.tokenVersion);
 
     // Return user data (without password)
     res.status(200).json({
@@ -222,9 +222,13 @@ export const exportData = async (req, res) => {
 // Delete/Deactivate Account (User self-service)
 export const deleteAccount = async (req, res) => {
   try {
+    // SECURITY: Increment token version to invalidate all existing tokens
     const user = await User.findByIdAndUpdate(
       req.user.userId,
-      { active: false },
+      { 
+        active: false,
+        $inc: { tokenVersion: 1 }
+      },
       { new: true }
     );
 
@@ -232,7 +236,7 @@ export const deleteAccount = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.status(200).json({ message: 'Account deactivated successfully' });
+    res.status(200).json({ message: 'Account deactivated successfully. All sessions invalidated.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -258,11 +262,14 @@ export const changePassword = async (req, res) => {
       return res.status(401).json({ error: 'Old password is incorrect' });
     }
 
-    // Update password
+    // Update password and increment token version to invalidate all existing tokens
     user.password = newPassword;
+    user.tokenVersion += 1;
     await user.save();
 
-    res.status(200).json({ message: 'Password changed successfully' });
+    res.status(200).json({ 
+      message: 'Password changed successfully. All sessions invalidated. Please login again.' 
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -283,9 +290,13 @@ export const deactivateUser = async (req, res) => {
   try {
     const { userId } = req.params;
 
+    // SECURITY: Increment token version to invalidate all user's tokens
     const user = await User.findByIdAndUpdate(
       userId,
-      { active: false },
+      { 
+        active: false,
+        $inc: { tokenVersion: 1 }
+      },
       { new: true }
     );
 
@@ -293,7 +304,7 @@ export const deactivateUser = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.status(200).json({ message: 'User deactivated successfully' });
+    res.status(200).json({ message: 'User deactivated successfully. All sessions invalidated.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

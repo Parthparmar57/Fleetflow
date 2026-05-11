@@ -57,6 +57,12 @@ const userSchema = new mongoose.Schema(
     lastLogin: {
       type: Date,
     },
+    // SECURITY: Token version for session invalidation
+    // Increment this on password change, logout, or account deactivation
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

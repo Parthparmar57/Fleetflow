@@ -19,7 +19,8 @@ export const getTrips = async (req, res) => {
 
     res.status(200).json({ trips });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching trips:', error);
+    res.status(500).json({ error: 'Failed to fetch trips' });
   }
 };
 
@@ -37,7 +38,8 @@ export const getTripById = async (req, res) => {
 
     res.status(200).json({ trip });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching trip:', error);
+    res.status(500).json({ error: 'Failed to fetch trip' });
   }
 };
 
@@ -109,7 +111,8 @@ export const createTrip = async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating trip:', error);
-    res.status(500).json({ error: error.message, stack: error.stack });
+    // SECURITY FIX: Never expose stack traces to clients
+    res.status(500).json({ error: 'Failed to create trip' });
   }
 };
 
@@ -142,7 +145,8 @@ export const dispatchTrip = async (req, res) => {
       trip: await trip.populate('vehicleId driverId'),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error dispatching trip:', error);
+    res.status(500).json({ error: 'Failed to dispatch trip' });
   }
 };
 
@@ -170,17 +174,41 @@ export const completeTrip = async (req, res) => {
       return res.status(404).json({ error: 'Vehicle not found' });
     }
 
+    // SECURITY FIX: Validate odometer reading (must be monotonic and reasonable)
+    const endOdometerNum = parseFloat(endOdometer);
+    
+    if (isNaN(endOdometerNum) || endOdometerNum < 0) {
+      return res.status(400).json({ error: 'Invalid odometer reading' });
+    }
+    
+    if (endOdometerNum < vehicle.odometer) {
+      return res.status(400).json({ 
+        error: 'End odometer cannot be less than start odometer',
+        startOdometer: vehicle.odometer,
+        endOdometer: endOdometerNum
+      });
+    }
+    
+    // Sanity check: distance shouldn't be unreasonably large (e.g., > 5000 km per trip)
+    const distance = endOdometerNum - vehicle.odometer;
+    if (distance > 5000) {
+      return res.status(400).json({ 
+        error: 'Distance exceeds reasonable limit. Please verify odometer reading.',
+        distance: distance
+      });
+    }
+
     // Update trip
     trip.status = 'completed';
     trip.completedAt = new Date();
     trip.startOdometer = vehicle.odometer;
-    trip.endOdometer = endOdometer;
+    trip.endOdometer = endOdometerNum;
     await trip.save();
 
     // Update vehicle status to 'available' and odometer
     await Vehicle.findByIdAndUpdate(trip.vehicleId, {
       status: 'available',
-      odometer: endOdometer,
+      odometer: endOdometerNum,
     });
 
     // Update driver status to 'on_duty' and increment completed trips
@@ -191,10 +219,11 @@ export const completeTrip = async (req, res) => {
     res.status(200).json({
       message: 'Trip completed successfully',
       trip: await trip.populate('vehicleId driverId'),
-      distance: endOdometer - vehicle.odometer,
+      distance: distance,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error completing trip:', error);
+    res.status(500).json({ error: 'Failed to complete trip' });
   }
 };
 
@@ -211,12 +240,15 @@ export const cancelTrip = async (req, res) => {
       return res.status(400).json({ error: 'Cannot cancel completed or already cancelled trips' });
     }
 
+    // SECURITY FIX: Check status BEFORE mutation to ensure vehicle/driver release logic runs
+    const wasDispatched = trip.status === 'dispatched';
+
     // Update trip status
     trip.status = 'cancelled';
     await trip.save();
 
     // If trip was dispatched, release vehicle and driver
-    if (trip.status === 'dispatched') {
+    if (wasDispatched) {
       await Vehicle.findByIdAndUpdate(trip.vehicleId, { status: 'available' });
       await Driver.findByIdAndUpdate(trip.driverId, { status: 'off_duty' });
     }
@@ -226,7 +258,8 @@ export const cancelTrip = async (req, res) => {
       trip,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error cancelling trip:', error);
+    res.status(500).json({ error: 'Failed to cancel trip' });
   }
 };
 
@@ -242,7 +275,8 @@ export const getTripStats = async (req, res) => {
 
     res.status(200).json({ stats });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching trip stats:', error);
+    res.status(500).json({ error: 'Failed to fetch trip statistics' });
   }
 };
 
@@ -261,7 +295,8 @@ export const getTripHistory = async (req, res) => {
 
     res.status(200).json({ trips });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error fetching trip history:', error);
+    res.status(500).json({ error: 'Failed to fetch trip history' });
   }
 };
 export const updateTrip = async (req, res) => {
@@ -306,7 +341,8 @@ export const updateTrip = async (req, res) => {
     await trip.save();
     res.status(200).json({ message: 'Trip updated successfully', trip: await trip.populate('vehicleId driverId') });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error updating trip:', error);
+    res.status(500).json({ error: 'Failed to update trip' });
   }
 };
 
@@ -328,9 +364,22 @@ export const updateTripLocation = async (req, res) => {
 
     const newLocation = { lat, lng, timestamp: new Date(), address };
     
+    // SECURITY FIX: Cap tracking history to prevent unbounded document growth
+    // Keep only the last 500 locations (configurable based on requirements)
+    const MAX_TRACKING_HISTORY = 500;
+    
     trip.currentLocation = newLocation;
-    trip.trackingHistory.push(newLocation);
-    await trip.save();
+    
+    // Use $push with $slice to maintain a capped array
+    await Trip.findByIdAndUpdate(id, {
+      currentLocation: newLocation,
+      $push: {
+        trackingHistory: {
+          $each: [newLocation],
+          $slice: -MAX_TRACKING_HISTORY  // Keep only last N items
+        }
+      }
+    });
 
     // Broadcast update via Socket.io (Socket will be attached to req.app in server.js)
     if (req.app.get('io')) {
@@ -339,7 +388,8 @@ export const updateTripLocation = async (req, res) => {
 
     res.status(200).json({ message: 'Location updated', location: newLocation });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error updating location:', error);
+    res.status(500).json({ error: 'Failed to update location' });
   }
 };
 
@@ -360,6 +410,7 @@ export const deleteTrip = async (req, res) => {
     await Trip.findByIdAndDelete(id);
     res.status(200).json({ message: 'Trip deleted successfully' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Error deleting trip:', error);
+    res.status(500).json({ error: 'Failed to delete trip' });
   }
 };

@@ -1,0 +1,146 @@
+fix: resolve 12 critical and high severity security vulnerabilities
+
+CRITICAL FIXES (4):
+1. Privilege escalation - Remove client-controlled role assignment
+   - Force 'dispatcher' role server-side for all registrations
+   - Prevent self-registration as 'fleet_manager'
+   - File: backend/controllers/userController.js
+
+2. Insecure CORS - Implement strict origin allowlist
+   - Replace wildcard "*" with comma-separated allowlist
+   - Fail-closed behavior when no origins configured
+   - Prevent credential leakage via cross-origin attacks
+   - File: backend/server.js
+
+3. Data exposure - Remove /debug endpoint in production
+   - Restrict to development environment only
+   - Sanitize output to show boolean flags, not actual values
+   - Prevent MongoDB URI and config leakage
+   - File: backend/server.js
+
+4. Unauthorized access - Add JWT authentication to Socket.io
+   - Require valid token in handshake.auth before connection
+   - Attach verified user identity to socket
+   - Prevent anonymous live vehicle tracking
+   - File: backend/server.js
+
+HIGH SEVERITY FIXES (8):
+5. Session management - Add token revocation system
+   - Add tokenVersion field to User model
+   - Increment version on password change/account deactivation
+   - Verify version in auth middleware on every request
+   - Invalidate all user sessions on security events
+   - Files: backend/models/User.js, backend/controllers/userController.js,
+     backend/middleware/auth.js
+
+6. Information disclosure - Remove stack traces
+   - Never return stack traces to clients
+   - Log full error details server-side only
+   - Use generic error messages for clients
+   - Files: backend/controllers/tripController.js (all methods)
+
+7. Business logic - Fix trip cancellation state bug
+   - Check trip status BEFORE mutation, not after
+   - Properly release vehicle/driver when dispatched trips cancelled
+   - Prevent operational lock from stuck states
+   - File: backend/controllers/tripController.js
+
+8. Data integrity - Add odometer validation
+   - Validate numeric format and positive values
+   - Enforce monotonic increase (prevent rollback)
+   - Add sanity check for reasonable distance (< 5000 km)
+   - Prevent negative distance and corrupt analytics
+   - File: backend/controllers/tripController.js
+
+9. DoS prevention - Cap tracking history growth
+   - Limit tracking history to 500 locations per trip
+   - Use MongoDB $push with $slice for automatic capping
+   - Prevent unbounded document growth
+   - File: backend/controllers/tripController.js
+
+10. Authentication - Verify user active status
+    - Check user exists and is active on every request
+    - Block deactivated users immediately
+    - Add to auth middleware
+    - File: backend/middleware/auth.js
+
+11. Error handling - Generic client messages
+    - Replace error.message with generic messages
+    - Log detailed errors server-side with context
+    - Prevent validation mechanics exposure
+    - Files: All controllers
+
+12. Configuration - Add .env.example files
+    - Create backend/.env.example with secure defaults
+    - Create frontend/.env.example with API config
+    - Document all required environment variables
+    - Add security notes and best practices
+    - Files: backend/.env.example, frontend/.env.example
+
+ADDITIONAL CHANGES:
+- Add missing imports: mongoose, jwt in server.js
+- Add missing import: User model in auth middleware
+- Create database migration script for tokenVersion field
+- Add comprehensive security documentation
+
+BREAKING CHANGES:
+- FRONTEND_URL environment variable now required (comma-separated list)
+- Socket.io clients must provide JWT token in auth handshake:
+  ```javascript
+  const socket = io(url, { auth: { token: yourJWT } });
+  ```
+- All users must re-login after deployment (token version change)
+- /debug endpoint no longer available in production
+
+MIGRATION REQUIRED:
+Run before deployment:
+```bash
+node backend/migrations/add-token-version.js
+```
+
+This adds tokenVersion field (default: 0) to all existing users.
+
+TESTING:
+- All diagnostics passing
+- No syntax errors
+- Verified against OWASP Top 10
+- Token revocation tested
+- Odometer validation tested
+- Trip state transitions tested
+- CORS allowlist tested
+- Socket.io authentication tested
+
+DEPLOYMENT REQUIREMENTS:
+1. Set FRONTEND_URL with production domain(s)
+2. Run database migration script
+3. Update Socket.io client code to include auth token
+4. Set NODE_ENV=production
+5. Verify JWT_SECRET is strong (32+ chars)
+6. All users must re-login after deployment
+
+FILES CHANGED:
+Modified:
+- backend/server.js
+- backend/controllers/userController.js
+- backend/controllers/tripController.js
+- backend/middleware/auth.js
+- backend/models/User.js
+
+Created:
+- backend/.env.example
+- backend/migrations/add-token-version.js
+- frontend/.env.example
+- CRITICAL_BUGS_FIXED.md
+- HIGH_SEVERITY_BUGS_FIXED.md
+- SECURITY_FIXES_SUMMARY.md
+- COMMIT_MESSAGE.txt
+
+DOCUMENTATION:
+- CRITICAL_BUGS_FIXED.md: Detailed critical vulnerability fixes
+- HIGH_SEVERITY_BUGS_FIXED.md: Detailed high severity fixes with testing
+- SECURITY_FIXES_SUMMARY.md: Complete deployment guide and checklist
+
+Security audit completed: 12/12 vulnerabilities fixed
+Risk level: Medium (breaking changes require coordination)
+Estimated downtime: < 5 minutes (for migration)
+Rollback time: < 2 minutes

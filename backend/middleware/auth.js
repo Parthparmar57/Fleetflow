@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
+import User from '../models/User.js';
 
-// Verify JWT Token
-export const authenticate = (req, res, next) => {
+// Verify JWT Token with token version check
+export const authenticate = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
 
@@ -10,6 +11,24 @@ export const authenticate = (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // SECURITY: Verify token version to support revocation
+    // Check if user exists and token version matches
+    const user = await User.findById(decoded.userId).select('tokenVersion active');
+    
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+    
+    if (!user.active) {
+      return res.status(403).json({ error: 'Account is deactivated' });
+    }
+    
+    // Check if token version matches (supports logout/password change invalidation)
+    if (decoded.tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({ error: 'Token has been revoked. Please login again.' });
+    }
+    
     req.user = decoded;
     next();
   } catch (error) {
