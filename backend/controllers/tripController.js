@@ -1,11 +1,13 @@
 import Trip from '../models/Trip.js';
 import Vehicle from '../models/Vehicle.js';
 import Driver from '../models/Driver.js';
+import asyncHandler from '../middleware/asyncHandler.js';
+import logger from '../config/logger.js';
 
 export const getTrips = async (req, res) => {
   try {
     const { status, vehicleId, driverId } = req.query;
-    const query = {};
+    const query = { organizationId: req.user.organizationId };
 
     if (status) query.status = status;
     if (vehicleId) query.vehicleId = vehicleId;
@@ -27,7 +29,10 @@ export const getTrips = async (req, res) => {
 export const getTripById = async (req, res) => {
   try {
     const { id } = req.params;
-    const trip = await Trip.findById(id)
+    const trip = await Trip.findOne({
+      _id: id,
+      organizationId: req.user.organizationId
+    })
       .populate('vehicleId')
       .populate('driverId')
       .populate('createdBy', 'name email');
@@ -51,9 +56,15 @@ export const createTrip = async (req, res) => {
       return res.status(400).json({ error: 'Please provide all required fields' });
     }
 
-    // Fetch vehicle and driver
-    const vehicle = await Vehicle.findById(vehicleId);
-    const driver = await Driver.findById(driverId);
+    // Fetch vehicle and driver (must belong to same organization)
+    const vehicle = await Vehicle.findOne({
+      _id: vehicleId,
+      organizationId: req.user.organizationId
+    });
+    const driver = await Driver.findOne({
+      _id: driverId,
+      organizationId: req.user.organizationId
+    });
 
     if (!vehicle) {
       return res.status(404).json({ error: 'Vehicle not found' });
@@ -103,6 +114,7 @@ export const createTrip = async (req, res) => {
       notes,
       assignedAt: new Date(),
       createdBy: req.user.userId,
+      organizationId: req.user.organizationId,
     });
 
     res.status(201).json({
@@ -120,7 +132,10 @@ export const dispatchTrip = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const trip = await Trip.findById(id);
+    const trip = await Trip.findOne({
+      _id: id,
+      organizationId: req.user.organizationId
+    });
     if (!trip) {
       return res.status(404).json({ error: 'Trip not found' });
     }
@@ -159,7 +174,10 @@ export const completeTrip = async (req, res) => {
       return res.status(400).json({ error: 'Please provide end odometer reading' });
     }
 
-    const trip = await Trip.findById(id);
+    const trip = await Trip.findOne({
+      _id: id,
+      organizationId: req.user.organizationId
+    });
     if (!trip) {
       return res.status(404).json({ error: 'Trip not found' });
     }
@@ -227,41 +245,48 @@ export const completeTrip = async (req, res) => {
   }
 };
 
-export const cancelTrip = async (req, res) => {
-  try {
-    const { id } = req.params;
+export const cancelTrip = asyncHandler(async (req, res) => {
+  const { id } = req.params;
 
-    const trip = await Trip.findById(id);
-    if (!trip) {
-      return res.status(404).json({ error: 'Trip not found' });
-    }
-
-    if (trip.status === 'completed' || trip.status === 'cancelled') {
-      return res.status(400).json({ error: 'Cannot cancel completed or already cancelled trips' });
-    }
-
-    // SECURITY FIX: Check status BEFORE mutation to ensure vehicle/driver release logic runs
-    const wasDispatched = trip.status === 'dispatched';
-
-    // Update trip status
-    trip.status = 'cancelled';
-    await trip.save();
-
-    // If trip was dispatched, release vehicle and driver
-    if (wasDispatched) {
-      await Vehicle.findByIdAndUpdate(trip.vehicleId, { status: 'available' });
-      await Driver.findByIdAndUpdate(trip.driverId, { status: 'off_duty' });
-    }
-
-    res.status(200).json({
-      message: 'Trip cancelled successfully',
-      trip,
-    });
-  } catch (error) {
-    console.error('Error cancelling trip:', error);
-    res.status(500).json({ error: 'Failed to cancel trip' });
+  // ✅ SECURITY FIX: Add organizationId check
+  const trip = await Trip.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+  
+  if (!trip) {
+    return res.status(404).json({ error: 'Trip not found' });
   }
-};
+
+  if (trip.status === 'completed' || trip.status === 'cancelled') {
+    return res.status(400).json({ error: 'Cannot cancel completed or already cancelled trips' });
+  }
+
+  // SECURITY FIX: Check status BEFORE mutation to ensure vehicle/driver release logic runs
+  const wasDispatched = trip.status === 'dispatched';
+
+  // Update trip status
+  trip.status = 'cancelled';
+  await trip.save();
+
+  // If trip was dispatched, release vehicle and driver
+  if (wasDispatched) {
+    await Vehicle.findByIdAndUpdate(trip.vehicleId, { status: 'available' });
+    await Driver.findByIdAndUpdate(trip.driverId, { status: 'off_duty' });
+  }
+
+  logger.info('Trip cancelled', {
+    tripId: trip._id,
+    wasDispatched,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
+
+  res.status(200).json({
+    message: 'Trip cancelled successfully',
+    trip,
+  });
+});
 
 export const getTripStats = async (req, res) => {
   try {
@@ -299,52 +324,67 @@ export const getTripHistory = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch trip history' });
   }
 };
-export const updateTrip = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { vehicleId, driverId, cargoWeight, originLocation, destinationLocation, notes } = req.body;
+export const updateTrip = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { vehicleId, driverId, cargoWeight, originLocation, destinationLocation, notes } = req.body;
 
-    const trip = await Trip.findById(id);
-    if (!trip) {
-      return res.status(404).json({ error: 'Trip not found' });
-    }
-
-    if (trip.status !== 'draft') {
-      return res.status(400).json({ error: 'Only draft trips can be edited. Dispatched trips must be cancelled or completed.' });
-    }
-
-    // If vehicle or driver changed, validate again
-    if (vehicleId && vehicleId !== trip.vehicleId.toString()) {
-      const vehicle = await Vehicle.findById(vehicleId);
-      if (!vehicle || vehicle.status !== 'available') {
-        return res.status(400).json({ error: 'Selected vehicle is not available' });
-      }
-      if (cargoWeight && cargoWeight > vehicle.maxCapacityKg) {
-        return res.status(400).json({ error: 'Cargo weight exceeds new vehicle capacity' });
-      }
-      trip.vehicleId = vehicleId;
-    }
-
-    if (driverId && driverId !== trip.driverId.toString()) {
-      const driver = await Driver.findById(driverId);
-      if (!driver || driver.status === 'suspended' || driver.licenseExpiry < new Date()) {
-        return res.status(400).json({ error: 'Selected driver is ineligible' });
-      }
-      trip.driverId = driverId;
-    }
-
-    if (cargoWeight !== undefined) trip.cargoWeight = cargoWeight;
-    if (originLocation) trip.originLocation = originLocation;
-    if (destinationLocation) trip.destinationLocation = destinationLocation;
-    if (notes) trip.notes = notes;
-
-    await trip.save();
-    res.status(200).json({ message: 'Trip updated successfully', trip: await trip.populate('vehicleId driverId') });
-  } catch (error) {
-    console.error('Error updating trip:', error);
-    res.status(500).json({ error: 'Failed to update trip' });
+  // ✅ SECURITY FIX: Add organizationId check
+  const trip = await Trip.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+  
+  if (!trip) {
+    return res.status(404).json({ error: 'Trip not found' });
   }
-};
+
+  if (trip.status !== 'draft') {
+    return res.status(400).json({ error: 'Only draft trips can be edited. Dispatched trips must be cancelled or completed.' });
+  }
+
+  // If vehicle or driver changed, validate again
+  if (vehicleId && vehicleId !== trip.vehicleId.toString()) {
+    const vehicle = await Vehicle.findOne({
+      _id: vehicleId,
+      organizationId: req.user.organizationId
+    });
+    
+    if (!vehicle || vehicle.status !== 'available') {
+      return res.status(400).json({ error: 'Selected vehicle is not available' });
+    }
+    if (cargoWeight && cargoWeight > vehicle.maxCapacityKg) {
+      return res.status(400).json({ error: 'Cargo weight exceeds new vehicle capacity' });
+    }
+    trip.vehicleId = vehicleId;
+  }
+
+  if (driverId && driverId !== trip.driverId.toString()) {
+    const driver = await Driver.findOne({
+      _id: driverId,
+      organizationId: req.user.organizationId
+    });
+    
+    if (!driver || driver.status === 'suspended' || driver.licenseExpiry < new Date()) {
+      return res.status(400).json({ error: 'Selected driver is ineligible' });
+    }
+    trip.driverId = driverId;
+  }
+
+  if (cargoWeight !== undefined) trip.cargoWeight = cargoWeight;
+  if (originLocation) trip.originLocation = originLocation;
+  if (destinationLocation) trip.destinationLocation = destinationLocation;
+  if (notes) trip.notes = notes;
+
+  await trip.save();
+  
+  logger.info('Trip updated', {
+    tripId: trip._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
+  
+  res.status(200).json({ message: 'Trip updated successfully', trip: await trip.populate('vehicleId driverId') });
+});
 
 export const updateTripLocation = async (req, res) => {
   try {
@@ -393,24 +433,32 @@ export const updateTripLocation = async (req, res) => {
   }
 };
 
-export const deleteTrip = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const trip = await Trip.findById(id);
+export const deleteTrip = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  // ✅ SECURITY FIX: Add organizationId check
+  const trip = await Trip.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
 
-    if (!trip) {
-      return res.status(404).json({ error: 'Trip not found' });
-    }
-
-    // Only allow deleting draft or cancelled trips to maintain integrity
-    if (trip.status !== 'draft' && trip.status !== 'cancelled') {
-      return res.status(400).json({ error: 'Only draft or cancelled trips can be deleted' });
-    }
-
-    await Trip.findByIdAndDelete(id);
-    res.status(200).json({ message: 'Trip deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting trip:', error);
-    res.status(500).json({ error: 'Failed to delete trip' });
+  if (!trip) {
+    return res.status(404).json({ error: 'Trip not found' });
   }
-};
+
+  // Only allow deleting draft or cancelled trips to maintain integrity
+  if (trip.status !== 'draft' && trip.status !== 'cancelled') {
+    return res.status(400).json({ error: 'Only draft or cancelled trips can be deleted' });
+  }
+
+  await Trip.findByIdAndDelete(id);
+  
+  logger.info('Trip deleted', {
+    tripId: trip._id,
+    status: trip.status,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
+  
+  res.status(200).json({ message: 'Trip deleted successfully' });
+});

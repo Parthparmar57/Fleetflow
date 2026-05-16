@@ -2,6 +2,13 @@ import mongoose from 'mongoose';
 
 const vehicleSchema = new mongoose.Schema(
   {
+    // SECURITY: Organization scoping for multi-tenancy
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,  // CRITICAL for query performance
+    },
     name: {
       type: String,
       required: [true, 'Please provide a vehicle name'],
@@ -70,5 +77,7 @@ const vehicleSchema = new mongoose.Schema(
 vehicleSchema.index({ status: 1 });
 vehicleSchema.index({ vehicleType: 1 });
 vehicleSchema.index({ licenseplate: 1 });
+vehicleSchema.index({ organizationId: 1, status: 1 });  // Compound index for scoped queries
+vehicleSchema.index({ createdBy: 1 });
 
 export default mongoose.model('Vehicle', vehicleSchema);

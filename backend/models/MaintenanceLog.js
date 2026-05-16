@@ -2,6 +2,13 @@ import mongoose from 'mongoose';
 
 const maintenanceLogSchema = new mongoose.Schema(
   {
+    // SECURITY: Organization scoping for multi-tenancy
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,  // CRITICAL for query performance
+    },
     vehicleId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vehicle',
@@ -53,6 +60,8 @@ const maintenanceLogSchema = new mongoose.Schema(
 // Index for quick lookups
 maintenanceLogSchema.index({ vehicleId: 1 });
 maintenanceLogSchema.index({ status: 1 });
+maintenanceLogSchema.index({ organizationId: 1, status: 1 });  // Compound index for scoped queries
+maintenanceLogSchema.index({ vehicleId: 1, status: 1 });  // For vehicle maintenance queries
 
 // Middleware to update vehicle status
 maintenanceLogSchema.post('save', async function (doc) {

@@ -1,5 +1,7 @@
 import User from '../models/User.js';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
+import logger, { logSecurityEvent } from '../config/logger.js';
 
 // Generate JWT Token with token version for revocation support
 const generateToken = (userId, role, tokenVersion) => {
@@ -13,16 +15,32 @@ const generateToken = (userId, role, tokenVersion) => {
 // Register User
 export const register = async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, organizationId } = req.body;
 
     // Validation
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Please provide name, email, and password' });
+    if (!name || !email || !password || !organizationId) {
+      return res.status(400).json({ error: 'Please provide name, email, password, and organizationId' });
+    }
+
+    // Verify organization exists and is active
+    const Organization = mongoose.model('Organization');
+    const organization = await Organization.findById(organizationId);
+    
+    if (!organization) {
+      return res.status(404).json({ error: 'Organization not found' });
+    }
+    
+    if (!organization.active) {
+      return res.status(403).json({ error: 'Organization is not active' });
     }
 
     // Check if user already exists
     const userExists = await User.findOne({ email });
     if (userExists) {
+      logSecurityEvent('DUPLICATE_REGISTRATION_ATTEMPT', {
+        email,
+        ip: req.ip
+      });
       return res.status(409).json({ error: 'User with this email already exists' });
     }
 
@@ -34,10 +52,18 @@ export const register = async (req, res) => {
       password,
       role: 'dispatcher',
       phone,
+      organizationId: organization._id,
     });
 
     // Generate token with version
     const token = generateToken(user._id, user.role, user.tokenVersion);
+
+    logger.info('User registered', {
+      userId: user._id,
+      email: user.email,
+      organizationId: organization._id,
+      ip: req.ip
+    });
 
     // Return user data (without password)
     res.status(201).json({
@@ -48,9 +74,11 @@ export const register = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        organizationId: user.organizationId,
       },
     });
   } catch (error) {
+    logger.error('Registration error', { error: error.message });
     res.status(500).json({ error: error.message });
   }
 };
@@ -68,17 +96,33 @@ export const login = async (req, res) => {
     // Find user and get password (normally not selected)
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
+      logSecurityEvent('FAILED_LOGIN_ATTEMPT', {
+        email,
+        reason: 'User not found',
+        ip: req.ip
+      });
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     // Check password
     const isPasswordCorrect = await user.comparePassword(password);
     if (!isPasswordCorrect) {
+      logSecurityEvent('FAILED_LOGIN_ATTEMPT', {
+        email,
+        userId: user._id,
+        reason: 'Invalid password',
+        ip: req.ip
+      });
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     // Check if user is active
     if (!user.active) {
+      logSecurityEvent('INACTIVE_USER_LOGIN_ATTEMPT', {
+        email,
+        userId: user._id,
+        ip: req.ip
+      });
       return res.status(403).json({ error: 'User account is not active' });
     }
 
@@ -89,6 +133,13 @@ export const login = async (req, res) => {
     // Generate token with version
     const token = generateToken(user._id, user.role, user.tokenVersion);
 
+    logger.info('User logged in', {
+      userId: user._id,
+      email: user.email,
+      organizationId: user.organizationId,
+      ip: req.ip
+    });
+
     // Return user data (without password)
     res.status(200).json({
       message: 'Login successful',
@@ -98,9 +149,11 @@ export const login = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        organizationId: user.organizationId,
       },
     });
   } catch (error) {
+    logger.error('Login error', { error: error.message });
     res.status(500).json({ error: error.message });
   }
 };

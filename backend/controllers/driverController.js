@@ -1,198 +1,207 @@
 import Driver from '../models/Driver.js';
+import asyncHandler from '../middleware/asyncHandler.js';
+import logger from '../config/logger.js';
 
-export const getDrivers = async (req, res) => {
-  try {
-    const { status, licenseCategory } = req.query;
-    const query = {};
+export const getDrivers = asyncHandler(async (req, res) => {
+  const { status, licenseCategory } = req.query;
+  const query = { organizationId: req.user.organizationId };
 
-    if (status) query.status = status;
-    if (licenseCategory) query.licenseCategory = licenseCategory;
+  if (status) query.status = status;
+  if (licenseCategory) query.licenseCategory = licenseCategory;
 
-    const drivers = await Driver.find(query).sort({ createdAt: -1 });
+  const drivers = await Driver.find(query).sort({ createdAt: -1 });
 
-    res.status(200).json({ drivers });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  res.status(200).json({ drivers });
+});
+
+export const getDriverById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const driver = await Driver.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+
+  if (!driver) {
+    return res.status(404).json({ error: 'Driver not found' });
   }
-};
 
-export const getDriverById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const driver = await Driver.findById(id);
+  res.status(200).json({ driver });
+});
 
-    if (!driver) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
+export const createDriver = asyncHandler(async (req, res) => {
+  const { name, email, licenseNumber, licenseExpiry, licenseCategory, phone, licenseIssuedDate } = req.body;
 
-    res.status(200).json({ driver });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  if (!name || !email || !licenseNumber || !licenseExpiry || !licenseCategory || !phone) {
+    return res.status(400).json({ error: 'Please provide all required fields' });
   }
-};
 
-export const createDriver = async (req, res) => {
-  try {
-    const { name, email, licenseNumber, licenseExpiry, licenseCategory, phone, licenseIssuedDate } = req.body;
-
-    if (!name || !email || !licenseNumber || !licenseExpiry || !licenseCategory || !phone) {
-      return res.status(400).json({ error: 'Please provide all required fields' });
-    }
-
-    // Check if driver already exists
-    const existingDriver = await Driver.findOne({
-      $or: [{ email }, { licenseNumber }],
-    });
-    if (existingDriver) {
-      return res.status(409).json({ error: 'Driver with this email or license already exists' });
-    }
-
-    const driver = await Driver.create({
-      name,
-      email,
-      licenseNumber: licenseNumber.toUpperCase(),
-      licenseExpiry,
-      licenseCategory,
-      phone,
-      licenseIssuedDate,
-    });
-
-    res.status(201).json({
-      message: 'Driver created successfully',
-      driver,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  // Check if driver already exists in this organization
+  const existingDriver = await Driver.findOne({
+    organizationId: req.user.organizationId,
+    $or: [{ email }, { licenseNumber: licenseNumber.toUpperCase() }],
+  });
+  
+  if (existingDriver) {
+    return res.status(409).json({ error: 'Driver with this email or license already exists' });
   }
-};
 
-export const updateDriver = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, safetyScore } = req.body;
+  const driver = await Driver.create({
+    name,
+    email,
+    licenseNumber: licenseNumber.toUpperCase(),
+    licenseExpiry,
+    licenseCategory,
+    phone,
+    licenseIssuedDate,
+    organizationId: req.user.organizationId,
+  });
 
-    const driver = await Driver.findByIdAndUpdate(
-      id,
-      { status, safetyScore },
-      { new: true, runValidators: true }
-    );
+  logger.info('Driver created', {
+    driverId: driver._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    if (!driver) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
+  res.status(201).json({
+    message: 'Driver created successfully',
+    driver,
+  });
+});
 
-    res.status(200).json({
-      message: 'Driver updated successfully',
-      driver,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+export const updateDriver = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { status, safetyScore } = req.body;
+
+  const driver = await Driver.findOneAndUpdate(
+    { _id: id, organizationId: req.user.organizationId },
+    { status, safetyScore },
+    { new: true, runValidators: true }
+  );
+
+  if (!driver) {
+    return res.status(404).json({ error: 'Driver not found' });
   }
-};
 
-export const updateDriverTrips = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { completedTrip = false } = req.body;
+  logger.info('Driver updated', {
+    driverId: driver._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    const updateData = { $inc: { tripCount: 1 } };
-    if (completedTrip) {
-      updateData.$inc.completedTrips = 1;
-    }
+  res.status(200).json({
+    message: 'Driver updated successfully',
+    driver,
+  });
+});
 
-    const driver = await Driver.findByIdAndUpdate(id, updateData, { new: true });
+export const updateDriverTrips = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { completedTrip = false } = req.body;
 
-    if (!driver) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
-
-    res.status(200).json({
-      message: 'Driver trip count updated',
-      driver,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  const updateData = { $inc: { tripCount: 1 } };
+  if (completedTrip) {
+    updateData.$inc.completedTrips = 1;
   }
-};
 
-export const checkLicenseValidity = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const driver = await Driver.findById(id);
+  // ✅ SECURITY FIX: Add organizationId check
+  const driver = await Driver.findOneAndUpdate(
+    { _id: id, organizationId: req.user.organizationId },
+    updateData,
+    { new: true }
+  );
 
-    if (!driver) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
-
-    const isValid = driver.licenseExpiry > new Date();
-
-    res.status(200).json({
-      driver: {
-        id: driver._id,
-        name: driver.name,
-        licenseExpiry: driver.licenseExpiry,
-      },
-      isLicenseValid: isValid,
-      daysUntilExpiry: isValid
-        ? Math.ceil((driver.licenseExpiry - new Date()) / (1000 * 60 * 60 * 24))
-        : 0,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  if (!driver) {
+    return res.status(404).json({ error: 'Driver not found' });
   }
-};
 
-export const deleteDriver = async (req, res) => {
-  try {
-    const { id } = req.params;
+  res.status(200).json({
+    message: 'Driver trip count updated',
+    driver,
+  });
+});
 
-    const driver = await Driver.findByIdAndDelete(id);
+export const checkLicenseValidity = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  // ✅ SECURITY FIX: Add organizationId check
+  const driver = await Driver.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
 
-    if (!driver) {
-      return res.status(404).json({ error: 'Driver not found' });
-    }
-
-    res.status(200).json({ message: 'Driver deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  if (!driver) {
+    return res.status(404).json({ error: 'Driver not found' });
   }
-};
 
-export const getExpiringLicenses = async (req, res) => {
-  try {
-    const daysThreshold = parseInt(req.query.days) || 30;
-    const today = new Date();
-    const expiryDate = new Date(today.getTime() + daysThreshold * 24 * 60 * 60 * 1000);
+  const isValid = driver.licenseExpiry > new Date();
 
-    const drivers = await Driver.find({
-      licenseExpiry: {
-        $gte: today,
-        $lte: expiryDate,
-      },
-      status: { $ne: 'suspended' },
-    }).sort({ licenseExpiry: 1 });
+  res.status(200).json({
+    driver: {
+      id: driver._id,
+      name: driver.name,
+      licenseExpiry: driver.licenseExpiry,
+    },
+    isLicenseValid: isValid,
+    daysUntilExpiry: isValid
+      ? Math.ceil((driver.licenseExpiry - new Date()) / (1000 * 60 * 60 * 24))
+      : 0,
+  });
+});
 
-    res.status(200).json({
-      threshold: `${daysThreshold} days`,
-      count: drivers.length,
-      drivers,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+export const deleteDriver = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // ✅ SECURITY FIX: Add organizationId check
+  const driver = await Driver.findOneAndDelete({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+
+  if (!driver) {
+    return res.status(404).json({ error: 'Driver not found' });
   }
-};
 
-export const getDriverStats = async (req, res) => {
-  try {
-    const stats = {
-      totalDrivers: await Driver.countDocuments(),
-      onDuty: await Driver.countDocuments({ status: 'on_duty' }),
-      offDuty: await Driver.countDocuments({ status: 'off_duty' }),
-      suspended: await Driver.countDocuments({ status: 'suspended' }),
-    };
+  logger.info('Driver deleted', {
+    driverId: driver._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    res.status(200).json({ stats });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
+  res.status(200).json({ message: 'Driver deleted successfully' });
+});
+
+export const getExpiringLicenses = asyncHandler(async (req, res) => {
+  const daysThreshold = parseInt(req.query.days) || 30;
+  const today = new Date();
+  const expiryDate = new Date(today.getTime() + daysThreshold * 24 * 60 * 60 * 1000);
+
+  // ✅ SECURITY FIX: Add organizationId filter
+  const drivers = await Driver.find({
+    organizationId: req.user.organizationId,
+    licenseExpiry: {
+      $gte: today,
+      $lte: expiryDate,
+    },
+    status: { $ne: 'suspended' },
+  }).sort({ licenseExpiry: 1 });
+
+  res.status(200).json({
+    threshold: `${daysThreshold} days`,
+    count: drivers.length,
+    drivers,
+  });
+});
+
+export const getDriverStats = asyncHandler(async (req, res) => {
+  // ✅ SECURITY FIX: Add organizationId filter
+  const orgQuery = { organizationId: req.user.organizationId };
+  
+  const stats = {
+    totalDrivers: await Driver.countDocuments(orgQuery),
+    onDuty: await Driver.countDocuments({ ...orgQuery, status: 'on_duty' }),
+    offDuty: await Driver.countDocuments({ ...orgQuery, status: 'off_duty' }),
+    suspended: await Driver.countDocuments({ ...orgQuery, status: 'suspended' }),
+  };
+
+  res.status(200).json({ stats });
+});

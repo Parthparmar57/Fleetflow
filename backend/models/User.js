@@ -18,8 +18,15 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, 'Please provide a password'],
-      minlength: 6,
+      minlength: 12,  // SECURITY: Increased from 6 to 12
       select: false, // Don't return password by default
+    },
+    // SECURITY: Organization scoping for multi-tenancy
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,  // CRITICAL for query performance
     },
     role: {
       type: String,

@@ -1,188 +1,217 @@
 import FuelExpense from '../models/FuelExpense.js';
+import Vehicle from '../models/Vehicle.js';
+import asyncHandler from '../middleware/asyncHandler.js';
+import logger from '../config/logger.js';
 
-export const getFuelExpenses = async (req, res) => {
-  try {
-    const { vehicleId } = req.query;
-    const query = {};
+export const getFuelExpenses = asyncHandler(async (req, res) => {
+  const { vehicleId } = req.query;
+  const query = { organizationId: req.user.organizationId };
 
-    if (vehicleId) query.vehicleId = vehicleId;
+  if (vehicleId) query.vehicleId = vehicleId;
 
-    const expenses = await FuelExpense.find(query)
-      .populate('vehicleId', 'name licenseplate')
-      .populate('tripId', 'tripId status')
-      .populate('createdBy', 'name email')
-      .sort({ date: -1 });
+  const expenses = await FuelExpense.find(query)
+    .populate('vehicleId', 'name licenseplate')
+    .populate('tripId', 'tripId status')
+    .populate('createdBy', 'name email')
+    .sort({ date: -1 });
 
-    res.status(200).json({ expenses });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  res.status(200).json({ expenses });
+});
+
+export const getExpenseById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  // ✅ SECURITY FIX: Add organizationId check
+  const expense = await FuelExpense.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  })
+    .populate('vehicleId')
+    .populate('tripId')
+    .populate('createdBy', 'name email');
+
+  if (!expense) {
+    return res.status(404).json({ error: 'Expense not found' });
   }
-};
 
-export const getExpenseById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const expense = await FuelExpense.findById(id)
-      .populate('vehicleId')
-      .populate('tripId')
-      .populate('createdBy', 'name email');
+  res.status(200).json({ expense });
+});
 
-    if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
-    }
+export const createFuelExpense = asyncHandler(async (req, res) => {
+  const { vehicleId, tripId, liters, cost, date, location, notes, status, taxDeductible, odometerReading } = req.body;
 
-    res.status(200).json({ expense });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  if (!vehicleId || !liters || !cost) {
+    return res.status(400).json({ error: 'Please provide vehicleId, liters, and cost' });
   }
-};
 
-export const createFuelExpense = async (req, res) => {
-  try {
-    const { vehicleId, tripId, liters, cost, date, location, notes, status, taxDeductible, odometerReading } = req.body;
-
-    if (!vehicleId || !liters || !cost) {
-      return res.status(400).json({ error: 'Please provide vehicleId, liters, and cost' });
-    }
-
-    const expense = await FuelExpense.create({
-      vehicleId,
-      tripId,
-      liters,
-      cost,
-      date: date || new Date(),
-      location,
-      notes,
-      status: status || 'pending',
-      taxDeductible: taxDeductible || false,
-      odometerReading,
-      createdBy: req.user.userId,
-    });
-
-    res.status(201).json({
-      message: 'Fuel expense logged successfully',
-      expense: await expense.populate('vehicleId'),
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  // ✅ SECURITY FIX: Verify vehicle belongs to user's organization
+  const vehicle = await Vehicle.findOne({
+    _id: vehicleId,
+    organizationId: req.user.organizationId
+  });
+  
+  if (!vehicle) {
+    return res.status(404).json({ error: 'Vehicle not found' });
   }
-};
 
-export const updateFuelExpense = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { liters, cost, date, location, notes, status, taxDeductible, odometerReading } = req.body;
+  const expense = await FuelExpense.create({
+    vehicleId,
+    tripId,
+    liters,
+    cost,
+    date: date || new Date(),
+    location,
+    notes,
+    status: status || 'pending',
+    taxDeductible: taxDeductible || false,
+    odometerReading,
+    createdBy: req.user.userId,
+    organizationId: req.user.organizationId,
+  });
 
-    const expense = await FuelExpense.findByIdAndUpdate(
-      id,
-      { liters, cost, date, location, notes, status, taxDeductible, odometerReading },
-      { new: true, runValidators: true }
-    );
+  logger.info('Fuel expense created', {
+    expenseId: expense._id,
+    vehicleId,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
-    }
+  res.status(201).json({
+    message: 'Fuel expense logged successfully',
+    expense: await expense.populate('vehicleId'),
+  });
+});
 
-    res.status(200).json({
-      message: 'Expense updated successfully',
-      expense,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+export const updateFuelExpense = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { liters, cost, date, location, notes, status, taxDeductible, odometerReading } = req.body;
+
+  // ✅ SECURITY FIX: Add organizationId check
+  const expense = await FuelExpense.findOneAndUpdate(
+    { _id: id, organizationId: req.user.organizationId },
+    { liters, cost, date, location, notes, status, taxDeductible, odometerReading },
+    { new: true, runValidators: true }
+  );
+
+  if (!expense) {
+    return res.status(404).json({ error: 'Expense not found' });
   }
-};
 
-export const deleteFuelExpense = async (req, res) => {
-  try {
-    const { id } = req.params;
+  logger.info('Fuel expense updated', {
+    expenseId: expense._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    const expense = await FuelExpense.findByIdAndDelete(id);
+  res.status(200).json({
+    message: 'Expense updated successfully',
+    expense,
+  });
+});
 
-    if (!expense) {
-      return res.status(404).json({ error: 'Expense not found' });
-    }
+export const deleteFuelExpense = asyncHandler(async (req, res) => {
+  const { id } = req.params;
 
-    res.status(200).json({ message: 'Expense deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  // ✅ SECURITY FIX: Add organizationId check
+  const expense = await FuelExpense.findOneAndDelete({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+
+  if (!expense) {
+    return res.status(404).json({ error: 'Expense not found' });
   }
-};
 
-export const getVehicleExpenseSummary = async (req, res) => {
-  try {
-    const { vehicleId, month } = req.query;
+  logger.info('Fuel expense deleted', {
+    expenseId: expense._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    if (!vehicleId) {
-      return res.status(400).json({ error: 'Please provide vehicleId' });
-    }
+  res.status(200).json({ message: 'Expense deleted successfully' });
+});
 
-    let query = { vehicleId };
+export const getVehicleExpenseSummary = asyncHandler(async (req, res) => {
+  const { vehicleId, month } = req.query;
 
-    // Filter by month if provided (format: YYYY-MM)
-    if (month) {
-      const [year, monthNum] = month.split('-');
-      const startDate = new Date(year, monthNum - 1, 1);
-      const endDate = new Date(year, monthNum, 0);
+  if (!vehicleId) {
+    return res.status(400).json({ error: 'Please provide vehicleId' });
+  }
 
-      query.date = {
-        $gte: startDate,
-        $lte: endDate,
-      };
-    }
+  // ✅ SECURITY FIX: Verify vehicle belongs to user's organization
+  const vehicle = await Vehicle.findOne({
+    _id: vehicleId,
+    organizationId: req.user.organizationId
+  });
+  
+  if (!vehicle) {
+    return res.status(404).json({ error: 'Vehicle not found' });
+  }
 
-    const expenses = await FuelExpense.find(query);
+  let query = { 
+    vehicleId,
+    organizationId: req.user.organizationId 
+  };
 
-    const summary = {
-      totalLiters: expenses.reduce((sum, exp) => sum + exp.liters, 0),
-      totalFuelCost: expenses.reduce((sum, exp) => sum + exp.cost, 0),
-      averagePricePerLiter: 0,
-      count: expenses.length,
+  // Filter by month if provided (format: YYYY-MM)
+  if (month) {
+    const [year, monthNum] = month.split('-');
+    const startDate = new Date(year, monthNum - 1, 1);
+    const endDate = new Date(year, monthNum, 0);
+
+    query.date = {
+      $gte: startDate,
+      $lte: endDate,
     };
-
-    if (summary.totalLiters > 0) {
-      summary.averagePricePerLiter = (summary.totalFuelCost / summary.totalLiters).toFixed(2);
-    }
-
-    res.status(200).json({ summary, expenses });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
-};
 
-export const getFleetExpenseSummary = async (req, res) => {
-  try {
-    const { month } = req.query;
+  const expenses = await FuelExpense.find(query);
 
-    let query = {};
+  const summary = {
+    totalLiters: expenses.reduce((sum, exp) => sum + exp.liters, 0),
+    totalFuelCost: expenses.reduce((sum, exp) => sum + exp.cost, 0),
+    averagePricePerLiter: 0,
+    count: expenses.length,
+  };
 
-    // Filter by month if provided
-    if (month) {
-      const [year, monthNum] = month.split('-');
-      const startDate = new Date(year, monthNum - 1, 1);
-      const endDate = new Date(year, monthNum, 0);
+  if (summary.totalLiters > 0) {
+    summary.averagePricePerLiter = (summary.totalFuelCost / summary.totalLiters).toFixed(2);
+  }
 
-      query.date = {
-        $gte: startDate,
-        $lte: endDate,
-      };
-    }
+  res.status(200).json({ summary, expenses });
+});
 
-    const expenses = await FuelExpense.find(query);
+export const getFleetExpenseSummary = asyncHandler(async (req, res) => {
+  const { month } = req.query;
 
-    const summary = {
-      totalLiters: expenses.reduce((sum, exp) => sum + exp.liters, 0),
-      totalFuelCost: expenses.reduce((sum, exp) => sum + exp.cost, 0),
-      vehicleCount: new Set(expenses.map(exp => exp.vehicleId.toString())).size,
-      averagePricePerLiter: 0,
-      count: expenses.length,
+  // ✅ SECURITY FIX: Add organizationId filter
+  let query = { organizationId: req.user.organizationId };
+
+  // Filter by month if provided
+  if (month) {
+    const [year, monthNum] = month.split('-');
+    const startDate = new Date(year, monthNum - 1, 1);
+    const endDate = new Date(year, monthNum, 0);
+
+    query.date = {
+      $gte: startDate,
+      $lte: endDate,
     };
-
-    if (summary.totalLiters > 0) {
-      summary.averagePricePerLiter = (summary.totalFuelCost / summary.totalLiters).toFixed(2);
-    }
-
-    res.status(200).json(summary);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
-};
+
+  const expenses = await FuelExpense.find(query);
+
+  const summary = {
+    totalLiters: expenses.reduce((sum, exp) => sum + exp.liters, 0),
+    totalFuelCost: expenses.reduce((sum, exp) => sum + exp.cost, 0),
+    vehicleCount: new Set(expenses.map(exp => exp.vehicleId.toString())).size,
+    averagePricePerLiter: 0,
+    count: expenses.length,
+  };
+
+  if (summary.totalLiters > 0) {
+    summary.averagePricePerLiter = (summary.totalFuelCost / summary.totalLiters).toFixed(2);
+  }
+
+  res.status(200).json(summary);
+});

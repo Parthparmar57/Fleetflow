@@ -2,6 +2,13 @@ import mongoose from 'mongoose';
 
 const fuelExpenseSchema = new mongoose.Schema(
   {
+    // SECURITY: Organization scoping for multi-tenancy
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,  // CRITICAL for query performance
+    },
     vehicleId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vehicle',
@@ -75,5 +82,7 @@ fuelExpenseSchema.pre('validate', function (next) {
 fuelExpenseSchema.index({ vehicleId: 1 });
 fuelExpenseSchema.index({ tripId: 1 });
 fuelExpenseSchema.index({ date: 1 });
+fuelExpenseSchema.index({ organizationId: 1, date: -1 });  // Compound index for scoped queries
+fuelExpenseSchema.index({ vehicleId: 1, date: -1 });  // For vehicle expense summaries
 
 export default mongoose.model('FuelExpense', fuelExpenseSchema);

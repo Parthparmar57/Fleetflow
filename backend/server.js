@@ -8,9 +8,11 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
+import mongoSanitize from 'express-mongo-sanitize';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { connectDB } from './config/database.js';
+import logger, { logSecurityEvent } from './config/logger.js';
 import authRoutes from './routes/auth.js';
 import vehicleRoutes from './routes/vehicles.js';
 import driverRoutes from './routes/drivers.js';
@@ -18,27 +20,91 @@ import tripRoutes from './routes/trips.js';
 import maintenanceRoutes from './routes/maintenance.js';
 import expenseRoutes from './routes/expenses.js';
 import analyticsRoutes from './routes/analytics.js';
+import Trip from './models/Trip.js';
 
 dns.setServers(['1.1.1.1', '8.8.8.8']);
 dotenv.config();
 
+// Validate required environment variables
+const requiredEnvVars = ['MONGODB_URI', 'JWT_SECRET', 'FRONTEND_URL', 'NODE_ENV'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+  console.error(`❌ Missing required environment variables: ${missingEnvVars.join(', ')}`);
+  process.exit(1);
+}
+
 const app = express();
 const httpServer = createServer(app);
 
+// Trust proxy (for rate limiting behind reverse proxy)
+app.set('trust proxy', 1);
+
 // Production Hardening Middleware
-app.use(helmet()); // Secure HTTP headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", ...(process.env.FRONTEND_URL || '').split(',')],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
 app.use(compression()); // Compress responses
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev')); // Logging
+
+// Logging with winston
+app.use(morgan('combined', {
+  stream: {
+    write: (message) => logger.info(message.trim())
+  }
+}));
 
 // Rate Limiting
-const limiter = rateLimit({
+const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again after 15 minutes'
+  max: 5, // 5 attempts per 15 minutes
+  skipSuccessfulRequests: true,
+  message: 'Too many authentication attempts, please try again after 15 minutes',
+  handler: (req, res) => {
+    logSecurityEvent('RATE_LIMIT_EXCEEDED', {
+      ip: req.ip,
+      path: req.path,
+      userAgent: req.headers['user-agent']
+    });
+    res.status(429).json({
+      error: 'Too many authentication attempts, please try again after 15 minutes'
+    });
+  }
 });
 
-// Apply rate limiter to auth routes
-app.use('/api/auth', limiter);
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests from this IP, please try again later'
+});
+
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30, // 30 writes per minute
+  message: 'Too many write operations, please slow down'
+});
+
+// Apply rate limiters
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+app.use('/api', apiLimiter);
 
 // SECURITY: Strict CORS configuration with allowlist
 const allowedOrigins = (process.env.FRONTEND_URL || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -71,24 +137,41 @@ app.set('io', io);
 // Middleware - Strict CORS with credentials
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (mobile apps, Postman, etc.)
-    if (!origin) return callback(null, true);
+    // Allow requests with no origin (mobile apps, Postman, etc.) only in development
+    if (!origin && process.env.NODE_ENV === 'development') {
+      return callback(null, true);
+    }
     
     if (allowedOrigins.length === 0) {
-      // Fail-closed: no origins configured
+      logger.error('CORS: No allowed origins configured');
       return callback(new Error('CORS: No allowed origins configured'));
     }
     
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      logSecurityEvent('CORS_VIOLATION', { origin, ip: 'unknown' });
       callback(new Error('CORS: Origin not allowed'));
     }
   },
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Body parsing with size limits
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Sanitize data to prevent NoSQL injection
+app.use(mongoSanitize({
+  replaceWith: '_',
+  onSanitize: ({ req, key }) => {
+    logSecurityEvent('NOSQL_INJECTION_ATTEMPT', {
+      ip: req.ip,
+      path: req.path,
+      key
+    });
+  }
+}));
 
 // Connect to Database
 connectDB();
@@ -99,58 +182,120 @@ io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
     
     if (!token) {
+      logSecurityEvent('SOCKET_AUTH_FAILED', {
+        reason: 'No token provided',
+        socketId: socket.id
+      });
       return next(new Error('Authentication required'));
     }
     
     // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     socket.user = decoded;
+    logger.info('Socket authenticated', { userId: decoded.userId, socketId: socket.id });
     next();
   } catch (error) {
+    logSecurityEvent('SOCKET_AUTH_FAILED', {
+      reason: error.message,
+      socketId: socket.id
+    });
     next(new Error('Invalid or expired token'));
   }
 });
 
 // Socket.io connection logic
 io.on('connection', (socket) => {
-  console.log('🔌 Authenticated client connected:', socket.id, 'User:', socket.user.userId);
+  logger.info('Socket connected', { 
+    socketId: socket.id, 
+    userId: socket.user.userId,
+    organizationId: socket.user.organizationId 
+  });
 
   socket.on('join_trip', async (tripId) => {
-    // TODO: Add authorization check - verify user has access to this trip
-    // For now, authenticated users can join any trip
-    // In production, check if user owns/is assigned to this trip
-    socket.join(`trip_${tripId}`);
-    console.log(`📡 Client ${socket.id} (User: ${socket.user.userId}) joined trip tracking: ${tripId}`);
+    try {
+      // ✅ SECURITY FIX: Verify user has access to this trip
+      const trip = await Trip.findOne({
+        _id: tripId,
+        organizationId: socket.user.organizationId
+      });
+      
+      if (!trip) {
+        logSecurityEvent('UNAUTHORIZED_TRIP_ACCESS', {
+          userId: socket.user.userId,
+          tripId,
+          organizationId: socket.user.organizationId
+        });
+        socket.emit('error', { message: 'Trip not found or access denied' });
+        return;
+      }
+      
+      socket.join(`trip_${tripId}`);
+      socket.emit('joined_trip', { tripId });
+      logger.info('Socket joined trip', { 
+        socketId: socket.id, 
+        userId: socket.user.userId, 
+        tripId 
+      });
+    } catch (error) {
+      logger.error('Error joining trip', { error: error.message, tripId });
+      socket.emit('error', { message: 'Failed to join trip' });
+    }
   });
 
   socket.on('leave_trip', (tripId) => {
     socket.leave(`trip_${tripId}`);
-    console.log(`📴 Client ${socket.id} left trip tracking: ${tripId}`);
+    logger.info('Socket left trip', { socketId: socket.id, tripId });
   });
 
   socket.on('disconnect', () => {
-    console.log('🔌 Client disconnected:', socket.id);
+    logger.info('Socket disconnected', { socketId: socket.id, userId: socket.user.userId });
   });
 });
 
 // API Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/vehicles', vehicleRoutes);
-app.use('/api/drivers', driverRoutes);
-app.use('/api/trips', tripRoutes);
-app.use('/api/maintenance', maintenanceRoutes);
-app.use('/api/expenses', expenseRoutes);
+app.use('/api/vehicles', writeLimiter, vehicleRoutes);
+app.use('/api/drivers', writeLimiter, driverRoutes);
+app.use('/api/trips', writeLimiter, tripRoutes);
+app.use('/api/maintenance', writeLimiter, maintenanceRoutes);
+app.use('/api/expenses', writeLimiter, expenseRoutes);
 app.use('/api/analytics', analyticsRoutes);
 
-// Health Check
-app.get('/health', (req, res) => {
+// Enhanced Health Check
+app.get('/health', async (req, res) => {
   const dbStates = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-  res.status(200).json({
+  const health = {
     status: 'healthy',
     timestamp: new Date(),
-    database: dbStates[mongoose.connection.readyState] || 'unknown',
-    node_env: process.env.NODE_ENV,
-  });
+    uptime: process.uptime(),
+    checks: {}
+  };
+
+  // Database check
+  try {
+    await mongoose.connection.db.admin().ping();
+    health.checks.database = {
+      status: 'healthy',
+      state: dbStates[mongoose.connection.readyState] || 'unknown'
+    };
+  } catch (error) {
+    health.checks.database = {
+      status: 'unhealthy',
+      error: error.message
+    };
+    health.status = 'degraded';
+  }
+
+  // Memory check
+  const memUsage = process.memoryUsage();
+  health.checks.memory = {
+    heapUsed: `${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`,
+    heapTotal: `${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
+    rss: `${Math.round(memUsage.rss / 1024 / 1024)}MB`
+  };
+
+  const statusCode = health.status === 'healthy' ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 // SECURITY: Debug endpoint removed in production to prevent information disclosure
@@ -175,14 +320,60 @@ app.use((req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err.message);
+  // Log error
+  logger.error('Request error', {
+    error: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    ip: req.ip,
+    userId: req.user?.userId
+  });
+
+  // Don't expose internal errors in production
+  const message = process.env.NODE_ENV === 'production' 
+    ? 'Internal server error' 
+    : err.message || 'Something went wrong!';
+
   res.status(err.status || 500).json({
-    error: err.message || 'Something went wrong!',
+    error: message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
 
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
+  logger.info(`🚀 Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
   console.log(`🚀 Server running on port ${PORT}`);
+});
+
+// Graceful shutdown
+const gracefulShutdown = async (signal) => {
+  logger.info(`${signal} received, shutting down gracefully`);
+  
+  httpServer.close(() => {
+    logger.info('HTTP server closed');
+  });
+  
+  try {
+    await mongoose.connection.close();
+    logger.info('MongoDB connection closed');
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during shutdown', { error: error.message });
+    process.exit(1);
+  }
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', { reason, promise });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', { error: error.message, stack: error.stack });
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
 });

@@ -14,7 +14,7 @@ export const authenticate = async (req, res, next) => {
     
     // SECURITY: Verify token version to support revocation
     // Check if user exists and token version matches
-    const user = await User.findById(decoded.userId).select('tokenVersion active');
+    const user = await User.findById(decoded.userId).select('tokenVersion active organizationId role');
     
     if (!user) {
       return res.status(401).json({ error: 'User not found' });
@@ -29,7 +29,14 @@ export const authenticate = async (req, res, next) => {
       return res.status(401).json({ error: 'Token has been revoked. Please login again.' });
     }
     
-    req.user = decoded;
+    // SECURITY: Include organizationId for tenant scoping
+    req.user = {
+      userId: decoded.userId,
+      role: decoded.role,
+      tokenVersion: decoded.tokenVersion,
+      organizationId: user.organizationId,  // CRITICAL for IDOR prevention
+    };
+    
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {

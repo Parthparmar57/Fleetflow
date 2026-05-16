@@ -2,6 +2,13 @@ import mongoose from 'mongoose';
 
 const driverSchema = new mongoose.Schema(
   {
+    // SECURITY: Organization scoping for multi-tenancy
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,  // CRITICAL for query performance
+    },
     name: {
       type: String,
       required: [true, 'Please provide driver name'],
@@ -72,5 +79,6 @@ driverSchema.virtual('isLicenseValid').get(function () {
 driverSchema.index({ licenseNumber: 1 });
 driverSchema.index({ status: 1 });
 driverSchema.index({ licenseExpiry: 1 });
+driverSchema.index({ organizationId: 1, status: 1 });  // Compound index for scoped queries
 
 export default mongoose.model('Driver', driverSchema);

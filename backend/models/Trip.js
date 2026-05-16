@@ -2,6 +2,13 @@ import mongoose from 'mongoose';
 
 const tripSchema = new mongoose.Schema(
   {
+    // SECURITY: Organization scoping for multi-tenancy
+    organizationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Organization',
+      required: true,
+      index: true,  // CRITICAL for query performance
+    },
     tripId: {
       type: String,
       unique: true,
@@ -95,6 +102,8 @@ tripSchema.virtual('distance').get(function () {
 tripSchema.index({ status: 1 });
 tripSchema.index({ vehicleId: 1 });
 tripSchema.index({ driverId: 1 });
+tripSchema.index({ organizationId: 1, status: 1 });  // Compound index for scoped queries
+tripSchema.index({ createdBy: 1 });
 
 // Generate unique tripId before validation
 tripSchema.pre('validate', async function (next) {

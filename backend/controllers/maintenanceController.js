@@ -1,182 +1,204 @@
 import MaintenanceLog from '../models/MaintenanceLog.js';
 import Vehicle from '../models/Vehicle.js';
+import asyncHandler from '../middleware/asyncHandler.js';
+import logger from '../config/logger.js';
 
-export const getMaintenanceLogs = async (req, res) => {
-  try {
-    const { vehicleId, status } = req.query;
-    const query = {};
+export const getMaintenanceLogs = asyncHandler(async (req, res) => {
+  const { vehicleId, status } = req.query;
+  const query = { organizationId: req.user.organizationId };
 
-    if (vehicleId) query.vehicleId = vehicleId;
-    if (status) query.status = status;
+  if (vehicleId) query.vehicleId = vehicleId;
+  if (status) query.status = status;
 
-    const logs = await MaintenanceLog.find(query)
-      .populate('vehicleId', 'name licenseplate')
-      .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 });
+  const logs = await MaintenanceLog.find(query)
+    .populate('vehicleId', 'name licenseplate')
+    .populate('createdBy', 'name email')
+    .sort({ createdAt: -1 });
 
-    res.status(200).json({ logs });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  res.status(200).json({ logs });
+});
+
+export const getMaintenanceById = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  
+  // ✅ SECURITY FIX: Add organizationId check
+  const log = await MaintenanceLog.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  })
+    .populate('vehicleId')
+    .populate('createdBy', 'name email');
+
+  if (!log) {
+    return res.status(404).json({ error: 'Maintenance log not found' });
   }
-};
 
-export const getMaintenanceById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const log = await MaintenanceLog.findById(id)
-      .populate('vehicleId')
-      .populate('createdBy', 'name email');
+  res.status(200).json({ log });
+});
 
-    if (!log) {
-      return res.status(404).json({ error: 'Maintenance log not found' });
-    }
+export const createMaintenance = asyncHandler(async (req, res) => {
+  const { vehicleId, serviceType, description, cost, notes } = req.body;
 
-    res.status(200).json({ log });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  if (!vehicleId || !serviceType || !description || !cost) {
+    return res.status(400).json({ error: 'Please provide all required fields' });
   }
-};
 
-export const createMaintenance = async (req, res) => {
-  try {
-    const { vehicleId, serviceType, description, cost, notes } = req.body;
-
-    if (!vehicleId || !serviceType || !description || !cost) {
-      return res.status(400).json({ error: 'Please provide all required fields' });
-    }
-
-    // Check if vehicle exists
-    const vehicle = await Vehicle.findById(vehicleId);
-    if (!vehicle) {
-      return res.status(404).json({ error: 'Vehicle not found' });
-    }
-
-    // Create maintenance log
-    const log = await MaintenanceLog.create({
-      vehicleId,
-      serviceType,
-      description,
-      cost,
-      notes,
-      createdBy: req.user.userId,
-    });
-
-    // Auto-update vehicle status to 'in_shop'
-    await Vehicle.findByIdAndUpdate(vehicleId, { status: 'in_shop' });
-
-    res.status(201).json({
-      message: 'Maintenance logged successfully. Vehicle status set to "in_shop"',
-      log: await log.populate('vehicleId'),
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  // Check if vehicle exists and belongs to user's organization
+  const vehicle = await Vehicle.findOne({
+    _id: vehicleId,
+    organizationId: req.user.organizationId
+  });
+  
+  if (!vehicle) {
+    return res.status(404).json({ error: 'Vehicle not found' });
   }
-};
 
-export const completeMaintenance = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { endDate } = req.body;
+  // Create maintenance log
+  const log = await MaintenanceLog.create({
+    vehicleId,
+    serviceType,
+    description,
+    cost,
+    notes,
+    createdBy: req.user.userId,
+    organizationId: req.user.organizationId,
+  });
 
-    const log = await MaintenanceLog.findById(id);
-    if (!log) {
-      return res.status(404).json({ error: 'Maintenance log not found' });
-    }
+  // Auto-update vehicle status to 'in_shop'
+  await Vehicle.findByIdAndUpdate(vehicleId, { status: 'in_shop' });
 
-    if (log.status === 'completed') {
-      return res.status(400).json({ error: 'This maintenance is already completed' });
-    }
+  logger.info('Maintenance log created', {
+    logId: log._id,
+    vehicleId,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    // Update maintenance log
-    log.status = 'completed';
-    log.endDate = endDate || new Date();
-    await log.save();
+  res.status(201).json({
+    message: 'Maintenance logged successfully. Vehicle status set to "in_shop"',
+    log: await log.populate('vehicleId'),
+  });
+});
 
-    // Auto-update vehicle status to 'available'
-    await Vehicle.findByIdAndUpdate(log.vehicleId, { status: 'available' });
+export const completeMaintenance = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { endDate } = req.body;
 
-    res.status(200).json({
-      message: 'Maintenance completed successfully. Vehicle status set to "available"',
-      log: await log.populate('vehicleId'),
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  // ✅ SECURITY FIX: Add organizationId check
+  const log = await MaintenanceLog.findOne({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+  
+  if (!log) {
+    return res.status(404).json({ error: 'Maintenance log not found' });
   }
-};
 
-export const updateMaintenance = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { serviceType, description, cost, notes } = req.body;
-
-    const log = await MaintenanceLog.findByIdAndUpdate(
-      id,
-      { serviceType, description, cost, notes },
-      { new: true, runValidators: true }
-    );
-
-    if (!log) {
-      return res.status(404).json({ error: 'Maintenance log not found' });
-    }
-
-    res.status(200).json({
-      message: 'Maintenance updated successfully',
-      log,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  if (log.status === 'completed') {
+    return res.status(400).json({ error: 'This maintenance is already completed' });
   }
-};
 
-export const deleteMaintenance = async (req, res) => {
-  try {
-    const { id } = req.params;
+  // Update maintenance log
+  log.status = 'completed';
+  log.endDate = endDate || new Date();
+  await log.save();
 
-    const log = await MaintenanceLog.findByIdAndDelete(id);
+  // Auto-update vehicle status to 'available'
+  await Vehicle.findByIdAndUpdate(log.vehicleId, { status: 'available' });
 
-    if (!log) {
-      return res.status(404).json({ error: 'Maintenance log not found' });
-    }
+  logger.info('Maintenance completed', {
+    logId: log._id,
+    vehicleId: log.vehicleId,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    res.status(200).json({ message: 'Maintenance log deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  res.status(200).json({
+    message: 'Maintenance completed successfully. Vehicle status set to "available"',
+    log: await log.populate('vehicleId'),
+  });
+});
+
+export const updateMaintenance = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { serviceType, description, cost, notes } = req.body;
+
+  // ✅ SECURITY FIX: Add organizationId check
+  const log = await MaintenanceLog.findOneAndUpdate(
+    { _id: id, organizationId: req.user.organizationId },
+    { serviceType, description, cost, notes },
+    { new: true, runValidators: true }
+  );
+
+  if (!log) {
+    return res.status(404).json({ error: 'Maintenance log not found' });
   }
-};
 
-export const getMaintenanceAlerts = async (req, res) => {
-  try {
-    // Get all vehicles in maintenance
-    const inMaintenance = await Vehicle.countDocuments({ status: 'in_shop' });
+  logger.info('Maintenance updated', {
+    logId: log._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    // Get all pending maintenance (in progress)
-    const pendingLogs = await MaintenanceLog.find({ status: 'in_progress' })
-      .populate('vehicleId', 'name licenseplate')
-      .sort({ startDate: -1 });
+  res.status(200).json({
+    message: 'Maintenance updated successfully',
+    log,
+  });
+});
 
-    res.status(200).json({
-      vehiclesInMaintenance: inMaintenance,
-      pendingMaintenance: pendingLogs.length,
-      logs: pendingLogs,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+export const deleteMaintenance = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // ✅ SECURITY FIX: Add organizationId check
+  const log = await MaintenanceLog.findOneAndDelete({
+    _id: id,
+    organizationId: req.user.organizationId
+  });
+
+  if (!log) {
+    return res.status(404).json({ error: 'Maintenance log not found' });
   }
-};
 
-export const getMaintenanceHistory = async (req, res) => {
-  try {
-    const { vehicleId } = req.query;
-    const query = { status: 'completed' };
+  logger.info('Maintenance deleted', {
+    logId: log._id,
+    organizationId: req.user.organizationId,
+    userId: req.user.userId
+  });
 
-    if (vehicleId) query.vehicleId = vehicleId;
+  res.status(200).json({ message: 'Maintenance log deleted successfully' });
+});
 
-    const logs = await MaintenanceLog.find(query)
-      .populate('vehicleId', 'name licenseplate')
-      .sort({ endDate: -1 });
+export const getMaintenanceAlerts = asyncHandler(async (req, res) => {
+  // ✅ SECURITY FIX: Add organizationId filter
+  const orgQuery = { organizationId: req.user.organizationId };
+  
+  // Get all vehicles in maintenance
+  const inMaintenance = await Vehicle.countDocuments({ ...orgQuery, status: 'in_shop' });
 
-    res.status(200).json({ logs });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
+  // Get all pending maintenance (in progress)
+  const pendingLogs = await MaintenanceLog.find({ ...orgQuery, status: 'in_progress' })
+    .populate('vehicleId', 'name licenseplate')
+    .sort({ startDate: -1 });
+
+  res.status(200).json({
+    vehiclesInMaintenance: inMaintenance,
+    pendingMaintenance: pendingLogs.length,
+    logs: pendingLogs,
+  });
+});
+
+export const getMaintenanceHistory = asyncHandler(async (req, res) => {
+  const { vehicleId } = req.query;
+  const query = { 
+    status: 'completed',
+    organizationId: req.user.organizationId 
+  };
+
+  if (vehicleId) query.vehicleId = vehicleId;
+
+  const logs = await MaintenanceLog.find(query)
+    .populate('vehicleId', 'name licenseplate')
+    .sort({ endDate: -1 });
+
+  res.status(200).json({ logs });
+});

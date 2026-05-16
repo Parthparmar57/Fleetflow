@@ -3,7 +3,7 @@ import Vehicle from '../models/Vehicle.js';
 export const getVehicles = async (req, res) => {
   try {
     const { status, type } = req.query;
-    const query = {};
+    const query = { organizationId: req.user.organizationId };
 
     if (status) query.status = status;
     if (type) query.vehicleType = type;
@@ -21,7 +21,10 @@ export const getVehicles = async (req, res) => {
 export const getVehicleById = async (req, res) => {
   try {
     const { id } = req.params;
-    const vehicle = await Vehicle.findById(id)
+    const vehicle = await Vehicle.findOne({
+      _id: id,
+      organizationId: req.user.organizationId
+    })
       .populate('createdBy', 'name email')
       .populate('maintenanceHistory');
 
@@ -43,8 +46,11 @@ export const createVehicle = async (req, res) => {
       return res.status(400).json({ error: 'Please provide all required fields' });
     }
 
-    // Check if license plate already exists
-    const existingVehicle = await Vehicle.findOne({ licenseplate });
+    // Check if license plate already exists in this organization
+    const existingVehicle = await Vehicle.findOne({
+      licenseplate,
+      organizationId: req.user.organizationId
+    });
     if (existingVehicle) {
       return res.status(409).json({ error: 'Vehicle with this license plate already exists' });
     }
@@ -59,6 +65,7 @@ export const createVehicle = async (req, res) => {
       odometer: odometer || 0,
       fuelLevel: fuelLevel ?? 100,
       createdBy: req.user.userId,
+      organizationId: req.user.organizationId,
     });
 
     res.status(201).json({
@@ -98,8 +105,8 @@ export const updateVehicle = async (req, res) => {
       ...(fuelLevel !== undefined && { fuelLevel })
     };
 
-    const vehicle = await Vehicle.findByIdAndUpdate(
-      id,
+    const vehicle = await Vehicle.findOneAndUpdate(
+      { _id: id, organizationId: req.user.organizationId },
       updateData,
       { new: true, runValidators: true }
     );
@@ -121,7 +128,10 @@ export const deleteVehicle = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const vehicle = await Vehicle.findByIdAndDelete(id);
+    const vehicle = await Vehicle.findOneAndDelete({
+      _id: id,
+      organizationId: req.user.organizationId
+    });
 
     if (!vehicle) {
       return res.status(404).json({ error: 'Vehicle not found' });
@@ -137,8 +147,8 @@ export const retireVehicle = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const vehicle = await Vehicle.findByIdAndUpdate(
-      id,
+    const vehicle = await Vehicle.findOneAndUpdate(
+      { _id: id, organizationId: req.user.organizationId },
       { status: 'retired' },
       { new: true }
     );
@@ -158,12 +168,13 @@ export const retireVehicle = async (req, res) => {
 
 export const getVehicleStats = async (req, res) => {
   try {
+    const orgQuery = { organizationId: req.user.organizationId };
     const stats = {
-      totalVehicles: await Vehicle.countDocuments(),
-      available: await Vehicle.countDocuments({ status: 'available' }),
-      onTrip: await Vehicle.countDocuments({ status: 'on_trip' }),
-      inShop: await Vehicle.countDocuments({ status: 'in_shop' }),
-      retired: await Vehicle.countDocuments({ status: 'retired' }),
+      totalVehicles: await Vehicle.countDocuments(orgQuery),
+      available: await Vehicle.countDocuments({ ...orgQuery, status: 'available' }),
+      onTrip: await Vehicle.countDocuments({ ...orgQuery, status: 'on_trip' }),
+      inShop: await Vehicle.countDocuments({ ...orgQuery, status: 'in_shop' }),
+      retired: await Vehicle.countDocuments({ ...orgQuery, status: 'retired' }),
     };
 
     res.status(200).json({ stats });
