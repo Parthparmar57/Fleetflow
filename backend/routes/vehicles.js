@@ -9,6 +9,7 @@ import {
   getVehicleStats,
 } from '../controllers/vehicleController.js';
 import { authenticate, authorize } from '../middleware/auth.js';
+import { validateVehicle, validateMongoId } from '../middleware/validation.js';
 
 const router = express.Router();
 
@@ -22,18 +23,18 @@ router.get('/', getVehicles);
 router.get('/stats', getVehicleStats);
 
 // Get single vehicle by ID
-router.get('/:id', getVehicleById);
+router.get('/:id', validateMongoId('id'), getVehicleById);
 
 // Create vehicle (Fleet Manager only)
-router.post('/', authorize('fleet_manager'), createVehicle);
+router.post('/', authorize('fleet_manager'), validateVehicle, createVehicle);
 
 // Update vehicle (Fleet Manager only)
-router.put('/:id', authorize('fleet_manager'), updateVehicle);
+router.put('/:id', authorize('fleet_manager'), validateMongoId('id'), updateVehicle);
 
 // Retire vehicle (Fleet Manager only)
-router.put('/:id/retire', authorize('fleet_manager'), retireVehicle);
+router.put('/:id/retire', authorize('fleet_manager'), validateMongoId('id'), retireVehicle);
 
 // Delete vehicle (Fleet Manager only)
-router.delete('/:id', authorize('fleet_manager'), deleteVehicle);
+router.delete('/:id', authorize('fleet_manager'), validateMongoId('id'), deleteVehicle);
 
 export default router;

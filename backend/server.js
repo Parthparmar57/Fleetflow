@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import dns from 'dns';
 import helmet from 'helmet';
@@ -160,6 +161,9 @@ app.use(cors({
 // Body parsing with size limits
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// ✅ SECURITY FIX: Parse HTTPOnly cookies for JWT validation
+app.use(cookieParser());
 
 // Sanitize data to prevent NoSQL injection
 app.use(mongoSanitize({

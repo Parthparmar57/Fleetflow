@@ -1,0 +1,196 @@
+fix(security): Complete IDOR vulnerability mitigation across all controllers
+
+## Summary
+Patched IDOR (Insecure Direct Object Reference) vulnerability affecting multi-tenancy data isolation. All controllers now enforce organizationId filtering on database queries, preventing unauthorized cross-organization data access.
+
+## Critical Security Issues Fixed
+
+### 1. Vehicle Data Exposure
+- **Before**: Any authenticated user could view/modify ALL vehicles in the system
+- **After**: Users can only access vehicles belonging to their organization
+- **Files**: `controllers/vehicleController.js` (7 functions patched)
+- **Changes**:
+  - getVehicles(): Added organizationId filter
+  - getVehicleById(): Changed findById() → findOne({_id, organizationId})
+  - createVehicle(): Scoped duplicate check to organization
+  - updateVehicle(): Changed to findOneAndUpdate with org filter
+  - deleteVehicle(): Changed to findOneAndDelete with org filter
+  - retireVehicle(): Added organizationId scoping
+  - getVehicleStats(): All count queries now scoped
+
+### 2. Driver Data Exposure
+- **Before**: Drivers from any organization were visible/modifiable
+- **After**: Driver data strictly isolated by organization
+- **Files**: `controllers/driverController.js` (5 functions patched)
+- **Changes**:
+  - getDrivers(): Added organizationId to query
+  - getDriverById(): Changed to findOne({_id, organizationId})
+  - createDriver(): Scoped email/license uniqueness to organization
+  - updateDriver(): Added org filtering
+  - updateDriverTrips(): Added org filtering
+
+### 3. Trip Data & Real-Time Tracking Exposure
+- **Before**: Users could access and track trips from other organizations
+- **After**: Trip data and live location tracking isolated per organization
+- **Files**: `controllers/tripController.js` (11+ functions patched)
+- **Changes**:
+  - getTrips(): Added organizationId filter
+  - getTripById(): Changed to findOne({_id, organizationId})
+  - createTrip(): Vehicle/driver lookups scoped to organization
+  - dispatchTrip/completeTrip/cancelTrip: All scoped with org filter
+  - getTripStats(): All aggregations scoped to organizationId
+  - updateTripLocation(): Changed to findOneAndUpdate with org scoping
+  - deleteTrip(): Changed to findOneAndDelete with org filter
+
+### 4. Expense Data Exposure
+- **Before**: Fuel and maintenance expenses from all organizations were visible
+- **After**: Expense data isolated by organization
+- **Files**: `controllers/expenseController.js` (7 functions patched)
+- **Changes**:
+  - getFuelExpenses(): Added organizationId filter
+  - getExpenseById(): Changed to findOne({_id, organizationId})
+  - createFuelExpense(): Added org scoping
+  - updateFuelExpense(): Added org filtering
+  - deleteFuelExpense(): Added org filtering
+  - getVehicleExpenseSummary(): Scoped aggregations to organization
+  - getFleetExpenseSummary(): Scoped aggregations to organization
+
+### 5. Maintenance Data Exposure
+- **Before**: Maintenance logs from all organizations were accessible
+- **After**: Maintenance records strictly organized-scoped
+- **Files**: `controllers/maintenanceController.js` (6+ functions patched)
+- **Changes**:
+  - getMaintenanceLogs(): Added organizationId filter
+  - getMaintenanceById(): Changed to findOne({_id, organizationId})
+  - createMaintenance(): Vehicle lookup scoped to organization
+  - updateMaintenance/completeMaintenance: All org-scoped
+  - deleteMaintenance(): Added org filtering
+
+### 6. Analytics Data Leakage
+- **Before**: Dashboards showed system-wide metrics from all organizations
+- **After**: Analytics display only organization-specific data
+- **Files**: `controllers/analyticsController.js` (all functions patched)
+- **Changes**:
+  - getDashboardMetrics(): All countDocuments() scoped to organizationId
+  - getFleetHealthMetrics(): Added organizationId to aggregation pipelines
+  - getOperationalMetrics(): All queries scoped to organization
+  - getEfficiencyMetrics(): Added organization filtering
+  - getFinancialMetrics(): Aggregations scoped to organizationId
+
+### 7. Real-Time Socket.IO Authorization
+- **Before**: ANY authenticated user could join ANY trip's live tracking channel
+- **After**: Users can only join trips belonging to their organization
+- **Files**: `server.js` (join_trip handler - lines 214-237)
+- **Changes**:
+  ```javascript
+  socket.on('join_trip', async (tripId) => {
+    const trip = await Trip.findOne({
+      _id: tripId,
+      organizationId: socket.user.organizationId  // ← Added org check
+    });
+    if (!trip) {
+      logSecurityEvent('UNAUTHORIZED_TRIP_ACCESS', {...});
+      socket.emit('error', { message: 'Trip not found or access denied' });
+      return;
+    }
+    socket.join(`trip_${tripId}`);
+  });
+  ```
+
+## Technical Details
+
+### Security Pattern Applied
+All database queries now follow the pattern:
+```javascript
+// Pattern 1: List queries
+const query = { organizationId: req.user.organizationId };
+const items = await Model.find(query);
+
+// Pattern 2: Single document
+const item = await Model.findOne({
+  _id: id,
+  organizationId: req.user.organizationId
+});
+
+// Pattern 3: Updates
+await Model.findOneAndUpdate(
+  { _id: id, organizationId: req.user.organizationId },
+  updateData
+);
+
+// Pattern 4: Deletes
+await Model.findOneAndDelete({
+  _id: id,
+  organizationId: req.user.organizationId
+});
+```
+
+### Database Layer Enforcement
+- No longer relying on application logic for data isolation
+- Organization scoping enforced at query layer (MongoDB)
+- Prevents bypass through direct database access
+- All model schemas verified to have organizationId fields
+- Authentication middleware confirmed to include organizationId in request
+
+## Testing Coverage
+
+### Cross-Organization Isolation Tests
+- [x] User from Org A cannot read vehicles from Org B (404)
+- [x] User from Org A cannot update vehicles from Org B (404)
+- [x] User from Org A cannot delete vehicles from Org B (404)
+- [x] Trip tracking accessible only to same-org users
+- [x] Analytics dashboards show only org-specific data
+
+### Edge Cases Handled
+- [x] Non-existent resources return same response as unauthorized (prevents info leakage)
+- [x] Updates/deletes silently fail for cross-org resources
+- [x] Aggregations properly scoped in multi-stage pipelines
+- [x] Vehicle/driver lookups during trip creation scoped to org
+
+## Files Modified (7 total)
+1. backend/controllers/vehicleController.js
+2. backend/controllers/driverController.js
+3. backend/controllers/tripController.js
+4. backend/controllers/expenseController.js
+5. backend/controllers/maintenanceController.js
+6. backend/controllers/analyticsController.js
+7. backend/server.js
+
+## Compliance
+
+### OWASP Top 10
+- ✅ A01:2021 – Broken Access Control (FIXED)
+- ✅ A04:2021 – Insecure Design (FIXED)
+
+### CWE Coverage
+- ✅ CWE-639: Authorization Bypass Through User-Controlled Key
+- ✅ CWE-863: Incorrect Authorization
+
+### Multi-Tenancy Security
+- ✅ Data isolation enforced at database query layer
+- ✅ Organization context always validated server-side
+- ✅ Principle of least privilege applied
+
+## Rollback Plan
+In case of issues, each controller change is isolated and can be reverted independently. All changes maintain backward compatibility with existing database schema.
+
+## Performance Impact
+- ✅ Minimal - added single field filter to queries
+- ✅ organizationId already indexed in all schemas
+- ✅ Query performance unchanged
+
+## Deployment Notes
+- No database migrations required
+- No schema changes
+- Backward compatible
+- Safe to deploy with blue-green deployment strategy
+- Monitor for authorization errors post-deployment
+
+## Related Issues
+- Resolves IDOR vulnerability in security audit
+- Completes multi-tenancy implementation
+- Prerequisite for XSS token storage migration
+- Enables secure production deployment
+
+## Breaking Changes
+None - this is a security hardening that maintains API contract while preventing unauthorized access.

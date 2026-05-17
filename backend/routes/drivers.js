@@ -11,6 +11,7 @@ import {
   getDriverStats,
 } from '../controllers/driverController.js';
 import { authenticate, authorize } from '../middleware/auth.js';
+import { validateDriver, validateMongoId } from '../middleware/validation.js';
 
 const router = express.Router();
 
@@ -27,21 +28,21 @@ router.get('/stats', getDriverStats);
 router.get('/expiring/list', authorize('safety_officer', 'fleet_manager'), getExpiringLicenses);
 
 // Check license validity
-router.get('/:id/license-validity', checkLicenseValidity);
+router.get('/:id/license-validity', validateMongoId('id'), checkLicenseValidity);
 
 // Get single driver by ID
-router.get('/:id', getDriverById);
+router.get('/:id', validateMongoId('id'), getDriverById);
 
 // Create driver (Safety Officer only)
-router.post('/', authorize('safety_officer'), createDriver);
+router.post('/', authorize('safety_officer'), validateDriver, createDriver);
 
 // Update driver (Safety Officer only)
-router.put('/:id', authorize('safety_officer'), updateDriver);
+router.put('/:id', authorize('safety_officer'), validateMongoId('id'), updateDriver);
 
 // Update driver trip count (Dispatcher)
-router.put('/:id/trips', authorize('dispatcher', 'fleet_manager'), updateDriverTrips);
+router.put('/:id/trips', authorize('dispatcher', 'fleet_manager'), validateMongoId('id'), updateDriverTrips);
 
 // Delete driver (Safety Officer only)
-router.delete('/:id', authorize('safety_officer'), deleteDriver);
+router.delete('/:id', authorize('safety_officer'), validateMongoId('id'), deleteDriver);
 
 export default router;

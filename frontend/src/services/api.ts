@@ -9,15 +9,8 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-});
-
-// Add a request interceptor to include auth token
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('fleetflow_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  // ✅ SECURITY FIX: Enable credentials to automatically send/receive HTTPOnly cookies
+  withCredentials: true,
 });
 
 // Add a response interceptor to handle errors globally
@@ -25,7 +18,6 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('fleetflow_token');
       window.location.href = '/login';
     }
     return Promise.reject(error);

@@ -186,8 +186,11 @@ export const completeTrip = async (req, res) => {
       return res.status(400).json({ error: 'Only dispatched trips can be completed' });
     }
 
-    // Get start odometer from vehicle
-    const vehicle = await Vehicle.findById(trip.vehicleId);
+    // Get start odometer from vehicle (must be from same organization)
+    const vehicle = await Vehicle.findOne({
+      _id: trip.vehicleId,
+      organizationId: req.user.organizationId
+    });
     if (!vehicle) {
       return res.status(404).json({ error: 'Vehicle not found' });
     }
@@ -290,12 +293,13 @@ export const cancelTrip = asyncHandler(async (req, res) => {
 
 export const getTripStats = async (req, res) => {
   try {
+    const orgQuery = { organizationId: req.user.organizationId };
     const stats = {
-      totalTrips: await Trip.countDocuments(),
-      draft: await Trip.countDocuments({ status: 'draft' }),
-      dispatched: await Trip.countDocuments({ status: 'dispatched' }),
-      completed: await Trip.countDocuments({ status: 'completed' }),
-      cancelled: await Trip.countDocuments({ status: 'cancelled' }),
+      totalTrips: await Trip.countDocuments(orgQuery),
+      draft: await Trip.countDocuments({ ...orgQuery, status: 'draft' }),
+      dispatched: await Trip.countDocuments({ ...orgQuery, status: 'dispatched' }),
+      completed: await Trip.countDocuments({ ...orgQuery, status: 'completed' }),
+      cancelled: await Trip.countDocuments({ ...orgQuery, status: 'cancelled' }),
     };
 
     res.status(200).json({ stats });
@@ -308,7 +312,7 @@ export const getTripStats = async (req, res) => {
 export const getTripHistory = async (req, res) => {
   try {
     const { vehicleId, driverId } = req.query;
-    const query = { status: 'completed' };
+    const query = { organizationId: req.user.organizationId, status: 'completed' };
 
     if (vehicleId) query.vehicleId = vehicleId;
     if (driverId) query.driverId = driverId;
@@ -395,7 +399,10 @@ export const updateTripLocation = async (req, res) => {
       return res.status(400).json({ error: 'Latitude and longitude are required' });
     }
 
-    const trip = await Trip.findById(id);
+    const trip = await Trip.findOne({
+      _id: id,
+      organizationId: req.user.organizationId
+    });
     if (!trip) return res.status(404).json({ error: 'Trip not found' });
 
     if (trip.status !== 'dispatched') {
@@ -410,16 +417,22 @@ export const updateTripLocation = async (req, res) => {
     
     trip.currentLocation = newLocation;
     
-    // Use $push with $slice to maintain a capped array
-    await Trip.findByIdAndUpdate(id, {
-      currentLocation: newLocation,
-      $push: {
-        trackingHistory: {
-          $each: [newLocation],
-          $slice: -MAX_TRACKING_HISTORY  // Keep only last N items
+    // Use $push with $slice to maintain a capped array (with organization scoping)
+    await Trip.findOneAndUpdate(
+      {
+        _id: id,
+        organizationId: req.user.organizationId
+      },
+      {
+        currentLocation: newLocation,
+        $push: {
+          trackingHistory: {
+            $each: [newLocation],
+            $slice: -MAX_TRACKING_HISTORY  // Keep only last N items
+          }
         }
       }
-    });
+    );
 
     // Broadcast update via Socket.io (Socket will be attached to req.app in server.js)
     if (req.app.get('io')) {

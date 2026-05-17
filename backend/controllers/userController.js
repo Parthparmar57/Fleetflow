@@ -65,10 +65,18 @@ export const register = async (req, res) => {
       ip: req.ip
     });
 
-    // Return user data (without password)
+    // ✅ SECURITY FIX: Set HTTPOnly cookie to prevent XSS token theft
+    res.cookie('fleetflow_token', token, {
+      httpOnly: true,     // Cannot be accessed by JavaScript (XSS protection)
+      secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+      sameSite: 'strict', // CSRF protection
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      path: '/'
+    });
+
+    // Return user data (without token and password)
     res.status(201).json({
       message: 'User registered successfully',
-      token,
       user: {
         id: user._id,
         name: user.name,
@@ -140,10 +148,18 @@ export const login = async (req, res) => {
       ip: req.ip
     });
 
-    // Return user data (without password)
+    // ✅ SECURITY FIX: Set HTTPOnly cookie to prevent XSS token theft
+    res.cookie('fleetflow_token', token, {
+      httpOnly: true,     // Cannot be accessed by JavaScript (XSS protection)
+      secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+      sameSite: 'strict', // CSRF protection
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      path: '/'
+    });
+
+    // Return user data (without token and password)
     res.status(200).json({
       message: 'Login successful',
-      token,
       user: {
         id: user._id,
         name: user.name,
@@ -324,6 +340,25 @@ export const changePassword = async (req, res) => {
       message: 'Password changed successfully. All sessions invalidated. Please login again.' 
     });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ✅ SECURITY FIX: Logout endpoint to clear HTTPOnly cookie
+export const logout = async (req, res) => {
+  try {
+    // Clear the HTTPOnly cookie
+    res.clearCookie('fleetflow_token', { path: '/' });
+
+    logger.info('User logged out', {
+      userId: req.user.userId,
+      email: req.user.email,
+      ip: req.ip
+    });
+
+    res.status(200).json({ message: 'Logout successful' });
+  } catch (error) {
+    logger.error('Logout error', { error: error.message });
     res.status(500).json({ error: error.message });
   }
 };

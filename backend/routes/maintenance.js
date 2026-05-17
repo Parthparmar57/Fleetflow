@@ -10,6 +10,7 @@ import {
   getMaintenanceHistory,
 } from '../controllers/maintenanceController.js';
 import { authenticate, authorize } from '../middleware/auth.js';
+import { validateMaintenance, validateMongoId } from '../middleware/validation.js';
 
 const router = express.Router();
 
@@ -26,18 +27,18 @@ router.get('/alerts', getMaintenanceAlerts);
 router.get('/history', getMaintenanceHistory);
 
 // Get single maintenance log by ID
-router.get('/:id', getMaintenanceById);
+router.get('/:id', validateMongoId('id'), getMaintenanceById);
 
 // Create maintenance log (Fleet Manager)
-router.post('/', authorize('fleet_manager'), createMaintenance);
+router.post('/', authorize('fleet_manager'), validateMaintenance, createMaintenance);
 
 // Update maintenance log (Fleet Manager)
-router.put('/:id', authorize('fleet_manager'), updateMaintenance);
+router.put('/:id', authorize('fleet_manager'), validateMongoId('id'), updateMaintenance);
 
 // Complete maintenance (Fleet Manager)
-router.put('/:id/complete', authorize('fleet_manager'), completeMaintenance);
+router.put('/:id/complete', authorize('fleet_manager'), validateMongoId('id'), completeMaintenance);
 
 // Delete maintenance log (Fleet Manager)
-router.delete('/:id', authorize('fleet_manager'), deleteMaintenance);
+router.delete('/:id', authorize('fleet_manager'), validateMongoId('id'), deleteMaintenance);
 
 export default router;

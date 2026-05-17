@@ -13,6 +13,7 @@ import {
   deleteTrip,
 } from '../controllers/tripController.js';
 import { authenticate, authorize } from '../middleware/auth.js';
+import { validateTrip, validateMongoId } from '../middleware/validation.js';
 
 const router = express.Router();
 
@@ -29,27 +30,27 @@ router.get('/stats', getTripStats);
 router.get('/history', getTripHistory);
 
 // Get single trip by ID
-router.get('/:id', getTripById);
+router.get('/:id', validateMongoId('id'), getTripById);
 
 // Create trip (Dispatcher & Fleet Manager)
-router.post('/', authorize('dispatcher', 'fleet_manager'), createTrip);
+router.post('/', authorize('dispatcher', 'fleet_manager'), validateTrip, createTrip);
 
 // Dispatch trip (Dispatcher & Fleet Manager)
-router.put('/:id/dispatch', authorize('dispatcher', 'fleet_manager'), dispatchTrip);
+router.put('/:id/dispatch', authorize('dispatcher', 'fleet_manager'), validateMongoId('id'), dispatchTrip);
 
 // Complete trip (Dispatcher & Fleet Manager)
-router.put('/:id/complete', authorize('dispatcher', 'fleet_manager'), completeTrip);
+router.put('/:id/complete', authorize('dispatcher', 'fleet_manager'), validateMongoId('id'), completeTrip);
 
 // Cancel trip (Dispatcher & Fleet Manager)
-router.put('/:id/cancel', authorize('dispatcher', 'fleet_manager'), cancelTrip);
+router.put('/:id/cancel', authorize('dispatcher', 'fleet_manager'), validateMongoId('id'), cancelTrip);
 
 // Update trip (Dispatcher & Fleet Manager)
-router.put('/:id', authorize('dispatcher', 'fleet_manager'), updateTrip);
+router.put('/:id', authorize('dispatcher', 'fleet_manager'), validateMongoId('id'), updateTrip);
 
 // Update trip location (Authenticated users - usually driver)
-router.post('/:id/location', updateTripLocation);
+router.post('/:id/location', validateMongoId('id'), updateTripLocation);
 
 // Delete trip (Fleet Manager & Dispatcher)
-router.delete('/:id', authorize('fleet_manager', 'dispatcher'), deleteTrip);
+router.delete('/:id', authorize('fleet_manager', 'dispatcher'), validateMongoId('id'), deleteTrip);
 
 export default router;

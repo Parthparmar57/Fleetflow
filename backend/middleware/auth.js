@@ -4,7 +4,8 @@ import User from '../models/User.js';
 // Verify JWT Token with token version check
 export const authenticate = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
+    // ✅ SECURITY FIX: Check HTTPOnly cookie first (preferred), fall back to Authorization header
+    let token = req.cookies?.fleetflow_token || req.headers.authorization?.split(' ')[1];
 
     if (!token) {
       return res.status(401).json({ error: 'No token provided' });
