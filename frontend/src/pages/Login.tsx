@@ -19,8 +19,10 @@ export default function Login() {
     
     try {
       const response = await fleetService.login({ email, password });
-      const { token, user } = response.data;
-      login(token, user);
+      // ✅ SECURITY FIX: Token is now in HTTPOnly cookie (sent automatically by browser)
+      // Backend no longer returns token in response, only user data
+      const { user } = response.data;
+      login(user);
       toast.success('Access Granted. Welcome back.');
       navigate('/app');
     } catch (error: any) {

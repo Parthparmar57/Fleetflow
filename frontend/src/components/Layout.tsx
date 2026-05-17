@@ -77,8 +77,9 @@ export default function Layout() {
     { icon: Settings, label: 'Settings', to: '/app/settings' },
   ].filter(item => !item.roles || item.roles.includes(user?.role || ''));
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    // ✅ SECURITY FIX: Call async logout to clear HTTPOnly cookie on server
+    await logout();
     navigate('/login');
   };
 

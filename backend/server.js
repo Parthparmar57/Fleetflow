@@ -183,7 +183,16 @@ connectDB();
 // SECURITY: Socket.io authentication middleware
 io.use((socket, next) => {
   try {
-    const token = socket.handshake.auth?.token;
+    // ✅ SECURITY FIX: Check HTTPOnly cookie first (preferred), fall back to auth token
+    let token = socket.handshake.headers.cookie
+      ?.split('; ')
+      .find(c => c.startsWith('fleetflow_token='))
+      ?.split('=')?.[1];
+    
+    // Fallback to auth header for backward compatibility
+    if (!token) {
+      token = socket.handshake.auth?.token;
+    }
     
     if (!token) {
       logSecurityEvent('SOCKET_AUTH_FAILED', {

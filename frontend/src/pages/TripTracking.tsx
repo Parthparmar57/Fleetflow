@@ -81,8 +81,14 @@ export default function TripTracking() {
 
     fetchTrip();
 
-    // Setup Socket.io
-    const socketSession = io(SOCKET_URL);
+    // Setup Socket.io with credentials for HTTPOnly cookie support
+    // ✅ SECURITY FIX: Enable credentials to send HTTPOnly cookies automatically
+    const socketSession = io(SOCKET_URL, {
+      withCredentials: true,  // Send cookies with Socket.IO connection
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5
+    });
     socketRef.current = socketSession;
 
     socketSession.on('connect', () => {

@@ -5,8 +5,8 @@ import api from '../services/api';
 interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
-  login: (token: string, userData: User) => void;
-  logout: () => void;
+  login: (userData: User) => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
   checkAuth: () => Promise<void>;
   updateUser: (userData: User) => void;
@@ -20,22 +20,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const checkAuth = async () => {
-    const token = localStorage.getItem('fleetflow_token');
-    if (!token) {
-      setIsAuthenticated(false);
-      setUser(null);
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      // Verify token is valid by calling /auth/profile
+      // ✅ SECURITY FIX: Token is now in HTTPOnly cookie, automatically sent by browser
+      // Just verify user is logged in by calling /auth/profile
       const response = await api.get('/auth/profile');
       setUser(response.data.user);
       setIsAuthenticated(true);
     } catch (error) {
       console.error('Auth check failed:', error);
-      localStorage.removeItem('fleetflow_token');
       setIsAuthenticated(false);
       setUser(null);
     } finally {
@@ -47,16 +39,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkAuth();
   }, []);
 
-  const login = (token: string, userData: User) => {
-    localStorage.setItem('fleetflow_token', token);
+  const login = (userData: User) => {
+    // ✅ SECURITY FIX: Token is now in HTTPOnly cookie (browser manages it)
+    // Frontend only stores user data, not the token
     setIsAuthenticated(true);
     setUser(userData);
   };
 
-  const logout = () => {
-    localStorage.removeItem('fleetflow_token');
-    setIsAuthenticated(false);
-    setUser(null);
+  const logout = async () => {
+    try {
+      // ✅ SECURITY FIX: Call logout endpoint to clear HTTPOnly cookie
+      await api.post('/auth/logout');
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      // Clear local state regardless
+      setIsAuthenticated(false);
+      setUser(null);
+    }
   };
 
   const updateUser = (userData: User) => {

@@ -36,8 +36,10 @@ export default function Register() {
     
     try {
       const response = await fleetService.register(formData);
-      const { token, user } = response.data;
-      login(token, user);
+      // ✅ SECURITY FIX: Token is now in HTTPOnly cookie (sent automatically by browser)
+      // Backend no longer returns token in response, only user data
+      const { user } = response.data;
+      login(user);
       toast.success('Identity Created. Onboarding complete.');
       navigate('/app');
     } catch (error: any) {

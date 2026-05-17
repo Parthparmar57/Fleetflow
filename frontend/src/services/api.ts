@@ -28,6 +28,7 @@ export const fleetService = {
   // ===== AUTH =====
   login: (credentials: any) => api.post('/auth/login', credentials),
   register: (data: any) => api.post('/auth/register', data),
+  logout: () => api.post('/auth/logout'),
   getProfile: () => api.get('/auth/profile'),
   updateProfile: (data: any) => api.put('/auth/profile', data),
   changePassword: (data: any) => api.post('/auth/change-password', data),
