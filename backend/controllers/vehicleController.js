@@ -1,7 +1,10 @@
 import Vehicle from '../models/Vehicle.js';
 
 export const getVehicles = async (req, res) => {
-  try {
+  try {    // ✅ SECURITY FIX: Add pagination to prevent data dump attacks
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, parseInt(req.query.limit) || 20); // Max 50 per page
+    const skip = (page - 1) * limit;
     const { status, type } = req.query;
     const query = { organizationId: req.user.organizationId };
 
@@ -9,10 +12,25 @@ export const getVehicles = async (req, res) => {
     if (type) query.vehicleType = type;
 
     const vehicles = await Vehicle.find(query)
+      .limit(limit)
+      .skip(skip)
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
-    res.status(200).json({ vehicles });
+    const total = await Vehicle.countDocuments(query);
+    const totalPages = Math.ceil(total / limit);
+
+    res.status(200).json({ 
+      vehicles,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

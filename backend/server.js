@@ -72,11 +72,12 @@ app.use(morgan('combined', {
   }
 }));
 
-// Rate Limiting
+// ✅ SECURITY FIX: Comprehensive Rate Limiting
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts per 15 minutes
   skipSuccessfulRequests: true,
+  keyGenerator: (req) => req.ip,
   message: 'Too many authentication attempts, please try again after 15 minutes',
   handler: (req, res) => {
     logSecurityEvent('RATE_LIMIT_EXCEEDED', {
@@ -90,22 +91,27 @@ const authLimiter = rateLimit({
   }
 });
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests from this IP, please try again later'
+// Read operations (GET) - generous limit
+const readLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200, // 200 reads per 15 minutes
+  skip: (req) => req.method !== 'GET',
+  message: 'Too many read requests, please try again later'
 });
 
+// Write operations (POST, PUT, DELETE, PATCH) - stricter limit
 const writeLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 writes per minute
+  max: 30, // 30 write operations per minute
+  skip: (req) => ['GET', 'HEAD', 'OPTIONS'].includes(req.method),
   message: 'Too many write operations, please slow down'
 });
 
 // Apply rate limiters
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
-app.use('/api', apiLimiter);
+app.use('/api', readLimiter); // Read limiter for all GET requests
+app.use('/api', writeLimiter); // Write limiter for all POST/PUT/DELETE
 
 // SECURITY: Strict CORS configuration with allowlist
 const allowedOrigins = (process.env.FRONTEND_URL || '').split(',').map(s => s.trim()).filter(Boolean);

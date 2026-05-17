@@ -3,6 +3,11 @@ import asyncHandler from '../middleware/asyncHandler.js';
 import logger from '../config/logger.js';
 
 export const getDrivers = asyncHandler(async (req, res) => {
+  // ✅ SECURITY FIX: Add pagination to prevent data dump attacks
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const skip = (page - 1) * limit;
+
   const { status, licenseCategory } = req.query;
   const query = { organizationId: req.user.organizationId };
 
