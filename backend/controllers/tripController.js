@@ -6,6 +6,11 @@ import logger from '../config/logger.js';
 
 export const getTrips = async (req, res) => {
   try {
+    // ✅ SECURITY FIX: Add pagination to prevent data dump attacks
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+    const skip = (page - 1) * limit;
+
     const { status, vehicleId, driverId } = req.query;
     const query = { organizationId: req.user.organizationId };
 
@@ -14,12 +19,27 @@ export const getTrips = async (req, res) => {
     if (driverId) query.driverId = driverId;
 
     const trips = await Trip.find(query)
+      .limit(limit)
+      .skip(skip)
       .populate('vehicleId', 'name licenseplate maxCapacityKg')
       .populate('driverId', 'name licenseNumber safetyScore')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
-    res.status(200).json({ trips });
+    const total = await Trip.countDocuments(query);
+    const totalPages = Math.ceil(total / limit);
+
+    res.status(200).json({ 
+      trips,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    });
   } catch (error) {
     console.error('Error fetching trips:', error);
     res.status(500).json({ error: 'Failed to fetch trips' });

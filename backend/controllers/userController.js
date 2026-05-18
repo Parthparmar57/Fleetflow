@@ -366,8 +366,30 @@ export const logout = async (req, res) => {
 // Get All Users (Admin/Manager only)
 export const getAllUsers = async (req, res) => {
   try {
-    const users = await User.find({ active: true }).select('-password');
-    res.status(200).json({ users });
+    // ✅ SECURITY FIX: Add pagination to prevent data dump attacks
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+    const skip = (page - 1) * limit;
+
+    const users = await User.find({ active: true })
+      .select('-password')
+      .limit(limit)
+      .skip(skip);
+
+    const total = await User.countDocuments({ active: true });
+    const totalPages = Math.ceil(total / limit);
+
+    res.status(200).json({ 
+      users,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

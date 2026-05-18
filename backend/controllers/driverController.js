@@ -14,9 +14,25 @@ export const getDrivers = asyncHandler(async (req, res) => {
   if (status) query.status = status;
   if (licenseCategory) query.licenseCategory = licenseCategory;
 
-  const drivers = await Driver.find(query).sort({ createdAt: -1 });
+  const drivers = await Driver.find(query)
+    .limit(limit)
+    .skip(skip)
+    .sort({ createdAt: -1 });
 
-  res.status(200).json({ drivers });
+  const total = await Driver.countDocuments(query);
+  const totalPages = Math.ceil(total / limit);
+
+  res.status(200).json({ 
+    drivers,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1
+    }
+  });
 });
 
 export const getDriverById = asyncHandler(async (req, res) => {

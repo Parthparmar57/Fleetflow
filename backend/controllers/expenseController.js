@@ -4,18 +4,38 @@ import asyncHandler from '../middleware/asyncHandler.js';
 import logger from '../config/logger.js';
 
 export const getFuelExpenses = asyncHandler(async (req, res) => {
+  // ✅ SECURITY FIX: Add pagination to prevent data dump attacks
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const skip = (page - 1) * limit;
+
   const { vehicleId } = req.query;
   const query = { organizationId: req.user.organizationId };
 
   if (vehicleId) query.vehicleId = vehicleId;
 
   const expenses = await FuelExpense.find(query)
+    .limit(limit)
+    .skip(skip)
     .populate('vehicleId', 'name licenseplate')
     .populate('tripId', 'tripId status')
     .populate('createdBy', 'name email')
     .sort({ date: -1 });
 
-  res.status(200).json({ expenses });
+  const total = await FuelExpense.countDocuments(query);
+  const totalPages = Math.ceil(total / limit);
+
+  res.status(200).json({ 
+    expenses,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1
+    }
+  });
 });
 
 export const getExpenseById = asyncHandler(async (req, res) => {
