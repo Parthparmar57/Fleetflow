@@ -6,7 +6,7 @@ import dns from 'dns';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import mongoose from 'mongoose';
 import jwt from 'jsonwebtoken';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -77,7 +77,7 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5, // 5 attempts per 15 minutes
   skipSuccessfulRequests: true,
-  keyGenerator: (req) => req.ip,
+  keyGenerator: ipKeyGenerator,
   message: 'Too many authentication attempts, please try again after 15 minutes',
   handler: (req, res) => {
     logSecurityEvent('RATE_LIMIT_EXCEEDED', {
