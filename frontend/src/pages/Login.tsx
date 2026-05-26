@@ -27,7 +27,7 @@ export default function Login() {
       navigate('/app');
     } catch (error: any) {
       console.error('Login error:', error);
-      toast.error(error.response?.data?.message || 'Authentication declined.');
+      toast.error(error.response?.data?.error || 'Authentication declined.');
     } finally {
       setIsLoading(false);
     }

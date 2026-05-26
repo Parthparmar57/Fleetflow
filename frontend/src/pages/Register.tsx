@@ -44,7 +44,7 @@ export default function Register() {
       navigate('/app');
     } catch (error: any) {
       console.error('Registration error:', error);
-      toast.error(error.response?.data?.message || 'Identity creation failed.');
+      toast.error(error.response?.data?.error || 'Identity creation failed.');
     } finally {
       setIsLoading(false);
     }
@@ -125,7 +125,7 @@ export default function Register() {
                       name="password"
                       required
                       minLength={6}
-                      placeholder="Set Secure Pin"
+                      placeholder="Choose a password"
                       className="w-full bg-slate-50/50 border border-slate-100 rounded-[1.5rem] px-14 py-4 text-slate-900 focus:border-emerald-500 focus:bg-white transition-all outline-none font-bold placeholder:text-slate-300"
                       value={formData.password}
                       onChange={handleChange}
@@ -166,6 +166,7 @@ export default function Register() {
                   </select>
                 </div>
               </div>
+
 
               <button 
                 type="submit"
